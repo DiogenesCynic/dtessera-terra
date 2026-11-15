@@ -4,6 +4,7 @@ Dtessera Terra.py
 Main game entry point, state machine, event loop, and UI controller for Dtessera Terra.
 """
 
+import asyncio
 import copy
 import visual_backdrop
 import ch2_castellan
@@ -291,6 +292,8 @@ fs_offset_y = 0
 def toggle_fullscreen():
     """Toggles between 800x600 Windowed mode and crisp native-resolution Fullscreen."""
     global display_screen, is_fullscreen, fs_scale, fs_offset_x, fs_offset_y
+    if sys.platform == "emscripten":
+        return
     is_fullscreen = not is_fullscreen
     if is_fullscreen:
         display_screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN | pygame.HWSURFACE | pygame.DOUBLEBUF)
@@ -3647,703 +3650,276 @@ if DEV_MODE:
 # =========================================================================
 # 8. MAIN RENDER LOOP
 # =========================================================================
-while True:
-    mouse_pos = to_logical_pos(pygame.mouse.get_pos())
+async def main():
+    global menu_state, selected_target, selected_verb, ch3_selected_army_pos
+    global loc_typewriter_idx, log_typewriter_idx, mouse_pos
 
-    if menu_state == "CASINO_CRAPS" and player.get("cr_kick_to_combat"):
-        player["cr_kick_to_combat"] = False
-        player, log_msg, next_state = (
-            encounters.trigger_casino_enforcer_combat(
-                player, reason="cheating"
-            )
-        )
-        set_state(next_state, log_msg)
+    while True:
+        mouse_pos = to_logical_pos(pygame.mouse.get_pos())
 
-    # Check if a Private marching in First-Person Field Mode finished their day
-    if menu_state == "MAIN" and player.get("ch3_private_field_mode"):
-        dusk_ready, p_msg = ch3_war_engine.check_private_afternoon_progress(
-            player, world_map, action_taken="check"
-        )
-        if dusk_ready:
-            add_log(p_msg)
-            my_fac = player.get("ch3_faction", "Union")
-            att = {"faction": my_fac, "count": 4}
-            dfn = {"faction": "Laydere", "count": 3}
-            t_coord = player.get("ch3_daily_order", {}).get(
-                "target_pos", [10, 10]
-            )
-            t_key = f"{t_coord[0]},{t_coord[1]}"
-            player = ch3_combat_engine.init_ch3_evening_clash(
-                player, att, dfn, t_key, world_map
-            )
-            set_state("CH3_EVENING_PHASE", p_msg)
-
-    active_dpad = dpad_buttons if menu_state == "MAIN" else []
-    right_buttons = get_current_right_buttons()
-    if menu_state in (
-        "CASINO_BLACKJACK",
-        "CASINO_POKER",
-        "CASINO_ROULETTE",
-        "CASINO_CRAPS",
-        "MINIGAME_ARCHERY",
-    ):
-        all_active_buttons = right_buttons
-    else:
-        all_active_buttons = active_dpad + right_buttons
-
-    if pass_and_play.should_trigger_ch1_ch2_handover(player, menu_state):
-        player["pnp_resume_state"] = menu_state
-        pass_and_play.rotate_to_next_pnp_player(player)
-        set_state("PNP_HANDOVER_CURTAIN")
-    for event in pygame.event.get():
-        if hasattr(event, "pos"):
-            event.pos = to_logical_pos(event.pos)
-
-        if event.type == pygame.QUIT:
-            pygame.quit()
-            sys.exit()
-
-        # --- KEYBOARD EVENT HANDLING ---
-        if event.type == pygame.KEYDOWN:
-            if menu_state == "PNP_LOBBY_MODAL" and event.key != pygame.K_F10:
-                pass_and_play.handle_pnp_lobby_event(
-                    event, player, world_map, ui_renderer
-                )
-                continue
-            if event.key == pygame.K_F4:
-                player["ch3_prev_modal_state"] = menu_state
-                set_state("PNP_LOBBY_MODAL")
-                continue
-            if event.key == pygame.K_F10 or (
-                event.key == pygame.K_RETURN
-                and (event.mod & pygame.KMOD_ALT)
-            ):
-                toggle_fullscreen()
-                continue
-
-            if menu_state in (
-                "MAIN",
-                "STATUS_MENU",
-                "INVENTORY_MENU",
-                "MINIGAME_WEATHER_REPORT",
-            ):
-                if event.key == pygame.K_c:
-                    set_state(
-                        "MAIN"
-                        if menu_state == "STATUS_MENU"
-                        else "STATUS_MENU"
-                    )
-                    continue
-                if event.key == pygame.K_i:
-                    set_state(
-                        "MAIN"
-                        if menu_state == "INVENTORY_MENU"
-                        else "INVENTORY_MENU"
-                    )
-                    continue
-                if event.key == pygame.K_w:
-                    set_state(
-                        "MAIN"
-                        if menu_state == "MINIGAME_WEATHER_REPORT"
-                        else "MINIGAME_WEATHER_REPORT"
-                    )
-                    continue
-                if event.key == pygame.K_t and menu_state == "MAIN":
-                    add_log(weather_engine.toggle_topo_map(player))
-                    continue
-                if event.key == pygame.K_ESCAPE and menu_state != "MAIN":
-                    set_state("MAIN")
-                    continue
-
-            # --- DEVELOPER SANDBOX HOTKEYS (F1 - F4) ---
-            if DEV_MODE:
-                if event.key == pygame.K_F1:
-                    player["ch3_faction"] = player.get("ch3_faction", "Union")
-                    player["ch3_rank"] = player.get("ch3_rank", "General")
-                    player["ch3_world_bits"] = {
-                        f"track_{i}": 1 for i in range(1, 11)
-                    }
-                    for item in (
-                        "portable printing press",
-                        "codewheel",
-                        "war manual",
-                    ):
-                        if item not in player["inventory"]:
-                            player["inventory"].append(item)
-                    player = ch3_war_engine.init_chapter_3_world_board(
-                        player, world_map
-                    )
-                    player = ui_renderer.init_ch3_morning_phase(player)
-                    set_state(
-                        "CH3_MORNING_PHASE",
-                        "[DEV F1] Initialised Chapter 3 Morning War Ledger.",
-                    )
-                    continue
-
-                if event.key == pygame.K_F2:
-                    if "ch3_factions" not in player:
-                        player = ch3_war_engine.init_chapter_3_world_board(
-                            player, world_map
-                        )
-                    player["movement_points"] = 6
-                    ch3_war_engine.recalculate_ch3_total_points(player)
-                    set_state(
-                        "CH3_AFTERNOON_PHASE",
-                        "[DEV F2] Switched to Chapter 3 Strategic War Table.",
-                    )
-                    continue
-
-                if event.key == pygame.K_F3:
-                    if "ch3_factions" not in player:
-                        player = ch3_war_engine.init_chapter_3_world_board(
-                            player, world_map
-                        )
-                    att = {
-                        "faction": player.get("ch3_faction", "Union"),
-                        "count": 5,
-                    }
-                    dfn = {"faction": "Ragmore", "count": 4}
-                    player = ch3_combat_engine.init_ch3_evening_clash(
-                        player, att, dfn, "5,15", world_map
-                    )
-                    set_state(
-                        "CH3_EVENING_PHASE",
-                        "[DEV F3] Launched 3-Stage Stronghold Siege!",
-                    )
-                    continue
-
-                if event.key == pygame.K_F4:
-                    if "ch3_factions" not in player:
-                        player = ch3_war_engine.init_chapter_3_world_board(
-                            player, world_map
-                        )
-                    my_fac = player.get("ch3_faction", "Union")
-                    player["ch3_factions"][my_fac]["agenda_pts"] = 85
-                    is_over, winner = ch3_war_engine.check_ch3_endgame_trigger(
-                        player
-                    )
-                    if is_over and not player.get("_victory_recorded"):
-                        from mechanics import record_campaign_victory
-
-                        record_campaign_victory(player, profile_name="noburu")
-                        player["_victory_recorded"] = True
-                    set_state(
-                        "CH3_EPILOGUE",
-                        f"[DEV F4] {winner} achieved 100 Hegemony Points!",
-                    )
-                    continue
-
-        if menu_state == "MINIGAME_TYPESET":
-            printing_press_engine.handle_typeset_event(event, player)
-
-        # --- PASS-AND-PLAY LOBBY & HERALDIC HANDOVER CURTAIN CLICKS ---
-        if menu_state == "PNP_LOBBY_MODAL":
-            handled_pnp, next_pnp = pass_and_play.handle_pnp_lobby_event(
-                event, player, world_map, ui_renderer
-            )
-            if handled_pnp and next_pnp:
-                set_state(
-                    next_pnp,
-                    "Campaign & Pass-and-Play settings applied!",
-                )
-            continue
-
-        if menu_state == "PNP_HANDOVER_CURTAIN":
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if pass_and_play.HANDOVER_BTN_RECT.collidepoint(event.pos):
-                    target_st = player.pop("pnp_resume_state", None)
-                    if not target_st:
-                        target_st = (
-                            "CH3_MORNING_PHASE"
-                            if pass_and_play.get_session().get("in_chapter_3")
-                            else "MAIN"
-                        )
-                    set_state(
-                        target_st,
-                        f"=== {player.get('pnp_player_name', 'Player')}'s "
-                        "Turn Begins! ===",
-                    )
-            continue
-
-        # --- CHAPTER 3: TABLETOP SETTINGS, RULEBOOK & TUTORIAL MODALS ---
-        if menu_state == "CH3_SETTINGS_MODAL":
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                s_rects = player.get("ch3_settings_rects", {})
-                if (
-                    s_rects.get("open_pnp_lobby")
-                    and s_rects["open_pnp_lobby"].collidepoint(event.pos)
-                ):
-                    set_state("PNP_LOBBY_MODAL")
-                elif (
-                    s_rects.get("cycle_victory_mode")
-                    and s_rects["cycle_victory_mode"].collidepoint(event.pos)
-                ):
-                    v_modes = ["100_PTS", "250_PTS", "DOMINATION"]
-                    cur_v = player.get("ch3_victory_mode", "100_PTS")
-                    nxt_v = (
-                        (v_modes.index(cur_v) + 1) % len(v_modes)
-                        if cur_v in v_modes
-                        else 0
-                    )
-                    player["ch3_victory_mode"] = v_modes[nxt_v]
-                    ch3_war_engine.recalculate_ch3_total_points(player)
-                elif (
-                    s_rects.get("cycle_month")
-                    and s_rects["cycle_month"].collidepoint(event.pos)
-                ):
-                    player["current_month_idx"] = (
-                        player.get("current_month_idx", 1) + 1
-                    ) % 12
-                    weather_engine.update_weather_from_clock(player)
-                elif (
-                    s_rects.get("toggle_tooltips")
-                    and s_rects["toggle_tooltips"].collidepoint(event.pos)
-                ):
-                    player["ch3_show_tooltips"] = not player.get(
-                        "ch3_show_tooltips", True
-                    )
-                elif (
-                    s_rects.get("toggle_show_ai")
-                    and s_rects["toggle_show_ai"].collidepoint(event.pos)
-                ):
-                    player["ch3_show_ai_moves"] = not player.get(
-                        "ch3_show_ai_moves", True
-                    )
-                elif (
-                    s_rects.get("toggle_ai_pacing")
-                    and s_rects["toggle_ai_pacing"].collidepoint(event.pos)
-                ):
-                    modes = ["MANUAL", "SLOW", "NORMAL", "FAST"]
-                    cur_p = player.get("ch3_ai_pacing", "NORMAL")
-                    nxt_i = (
-                        (modes.index(cur_p) + 1) % len(modes)
-                        if cur_p in modes
-                        else 2
-                    )
-                    player["ch3_ai_pacing"] = modes[nxt_i]
-                elif (
-                    s_rects.get("toggle_confirm")
-                    and s_rects["toggle_confirm"].collidepoint(event.pos)
-                ):
-                    player["ch3_confirm_phases"] = not player.get(
-                        "ch3_confirm_phases", True
-                    )
-                elif (
-                    s_rects.get("toggle_click_slot")
-                    and s_rects["toggle_click_slot"].collidepoint(event.pos)
-                ):
-                    player["ch3_click_to_slot"] = not player.get(
-                        "ch3_click_to_slot", True
-                    )
-                elif (
-                    s_rects.get("open_tutorial")
-                    and s_rects["open_tutorial"].collidepoint(event.pos)
-                ):
-                    set_state("CH3_TUTORIAL_SELECT")
-                elif (
-                    s_rects.get("open_rulebook")
-                    and s_rects["open_rulebook"].collidepoint(event.pos)
-                ):
-                    set_state("CH3_RULEBOOK_MODAL")
-                elif (
-                    s_rects.get("close_settings")
-                    and s_rects["close_settings"].collidepoint(event.pos)
-                ):
-                    set_state(
-                        player.get("ch3_prev_modal_state", "CH3_MORNING_PHASE")
-                    )
-            continue
-
-        elif menu_state == "CH3_RULEBOOK_MODAL":
-            handled_rb, next_rb = ch3_tutorial_book.handle_ch3_rulebook_event(
-                event, player, world_map
-            )
-            if handled_rb and next_rb:
-                set_state(next_rb)
-            continue
-
-        elif menu_state == "CH3_TUTORIAL_SELECT":
-            handled_ts, next_ts = (
-                ch3_tutorial_book.handle_ch3_tutorial_select_event(
-                    event, player, world_map
+        if menu_state == "CASINO_CRAPS" and player.get("cr_kick_to_combat"):
+            player["cr_kick_to_combat"] = False
+            player, log_msg, next_state = (
+                encounters.trigger_casino_enforcer_combat(
+                    player, reason="cheating"
                 )
             )
-            if handled_ts and next_ts:
-                set_state(next_ts)
-            continue
-
-        # --- INTERCEPT TUTORIAL OVERLAY & CAMERA RAIL IN CH3 PHASES ---
+            set_state(next_state, log_msg)
+    
+        # Check if a Private marching in First-Person Field Mode finished their day
+        if menu_state == "MAIN" and player.get("ch3_private_field_mode"):
+            dusk_ready, p_msg = ch3_war_engine.check_private_afternoon_progress(
+                player, world_map, action_taken="check"
+            )
+            if dusk_ready:
+                add_log(p_msg)
+                my_fac = player.get("ch3_faction", "Union")
+                att = {"faction": my_fac, "count": 4}
+                dfn = {"faction": "Laydere", "count": 3}
+                t_coord = player.get("ch3_daily_order", {}).get(
+                    "target_pos", [10, 10]
+                )
+                t_key = f"{t_coord[0]},{t_coord[1]}"
+                player = ch3_combat_engine.init_ch3_evening_clash(
+                    player, att, dfn, t_key, world_map
+                )
+                set_state("CH3_EVENING_PHASE", p_msg)
+    
+        active_dpad = dpad_buttons if menu_state == "MAIN" else []
+        right_buttons = get_current_right_buttons()
         if menu_state in (
-            "CH3_MORNING_PHASE",
-            "CH3_AFTERNOON_PHASE",
-            "CH3_EVENING_PHASE",
+            "CASINO_BLACKJACK",
+            "CASINO_POKER",
+            "CASINO_ROULETTE",
+            "CASINO_CRAPS",
+            "MINIGAME_ARCHERY",
         ):
-            t_click, t_exited = (
-                ch3_tutorial_book.handle_tutorial_overlay_click(event, player)
-            )
-            if t_click:
-                if t_exited:
-                    set_state("CH3_MORNING_PHASE", "Tutorial concluded.")
-                continue
-
-        if menu_state in ("CH3_MORNING_PHASE", "CH3_AFTERNOON_PHASE"):
-            cam_handled, cam_act = (
-                ch3_board_renderer.handle_board_camera_event(event, player)
-            )
-            if cam_handled:
-                if cam_act == "OPEN_CH3_SETTINGS":
+            all_active_buttons = right_buttons
+        else:
+            all_active_buttons = active_dpad + right_buttons
+    
+        if pass_and_play.should_trigger_ch1_ch2_handover(player, menu_state):
+            player["pnp_resume_state"] = menu_state
+            pass_and_play.rotate_to_next_pnp_player(player)
+            set_state("PNP_HANDOVER_CURTAIN")
+        for event in pygame.event.get():
+            if hasattr(event, "pos"):
+                event.pos = to_logical_pos(event.pos)
+    
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+    
+            # --- KEYBOARD EVENT HANDLING ---
+            if event.type == pygame.KEYDOWN:
+                if menu_state == "PNP_LOBBY_MODAL" and event.key != pygame.K_F10:
+                    pass_and_play.handle_pnp_lobby_event(
+                        event, player, world_map, ui_renderer
+                    )
+                    continue
+                if event.key == pygame.K_F4:
                     player["ch3_prev_modal_state"] = menu_state
-                    set_state("CH3_SETTINGS_MODAL")
-                elif cam_act == "OPEN_CH3_RULEBOOK":
-                    player["ch3_prev_modal_state"] = menu_state
-                    set_state("CH3_RULEBOOK_MODAL")
-                continue
-
-        # --- CHAPTER 3: MORNING PHASE ---
-        if menu_state == "CH3_MORNING_PHASE":
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                commit_rect = player.get("ch3_commit_rect")
-                excl_rect = player.get("ch3_exclusive_action_rect")
-                dice_list = player.get("ch3_morning_dice", [])
-                slots = player.get("ch3_morning_slots", {})
-                rolled = player.get("ch3_dice_rolled_today", False)
-
-                # 1. Explicit Dawn Roll
-                if not rolled:
-                    if commit_rect and commit_rect.collidepoint(event.pos):
-                        player["ch3_dice_rolled_today"] = True
-                        player["ch3_dice_anim_until"] = (
-                            pygame.time.get_ticks() + 800
-                        )
-                        if (
-                            player.get("ch3_tutorial_active")
-                            and player.get("ch3_tutorial_step") == 3
-                        ):
-                            player["ch3_tutorial_step"] = 4
+                    set_state("PNP_LOBBY_MODAL")
                     continue
-
-                # 2. Reversible Slotted Dice (Click Slotted Die -> Unslot!)
-                unslotted_now = False
-                for slot_data in slots.values():
-                    for d_obj, well_rect in list(
-                        slot_data.get("dice_rects", [])
-                    ):
-                        if well_rect.collidepoint(event.pos):
-                            d_obj["slotted_in"] = None
-                            if d_obj in slot_data.get("dice_objs", []):
-                                slot_data["dice_objs"].remove(d_obj)
-                            player["ch3_selected_die_id"] = None
-                            player["_warned_empty_morning"] = False
-                            unslotted_now = True
-                            if (
-                                player.get("ch3_tutorial_active")
-                                and player.get("ch3_tutorial_step") == 5
-                            ):
-                                player["ch3_tutorial_step"] = 6
-                            break
-                    if unslotted_now:
-                        break
-                if unslotted_now:
+                if event.key == pygame.K_F10 or (
+                    event.key == pygame.K_RETURN
+                    and (event.mod & pygame.KMOD_ALT)
+                ):
+                    toggle_fullscreen()
                     continue
-
-                # 3. Chapter 2 Specialist War-Table Tool Buttons
-                tool_rects = player.get("ch3_tool_rects", {})
-                clicked_tool = None
-                for t_key, t_rect in tool_rects.items():
-                    if t_rect and t_rect.collidepoint(event.pos):
-                        clicked_tool = t_key
-                        break
-
-                if clicked_tool:
-                    msg = ch3_war_engine.execute_ch2_war_tool(
-                        player, clicked_tool, world_map
-                    )
-                    player["ch3_dice_anim_until"] = (
-                        pygame.time.get_ticks() + 650
-                    )
-                    add_log(msg)
-                    continue
-
-                # 4. Exclusive Rank Action Button
-                if excl_rect and excl_rect.collidepoint(event.pos):
-                    rank = player.get("ch3_rank", "Private")
-                    if rank == "General":
-                        player["global_morale"] = max(
-                            0, player.get("global_morale", 50) - 10
-                        )
-                        player = ui_renderer.init_ch3_morning_phase(player)
-                        player["ch3_dice_rolled_today"] = True
-                        player["ch3_dice_anim_until"] = (
-                            pygame.time.get_ticks() + 800
-                        )
-                    elif rank == "Captain" and not player.get(
-                        "ch3_promoted_today"
-                    ):
-                        player["ch3_promoted_today"] = True
-                        dice_list.append({
-                            "id": len(dice_list),
-                            "value": 6,
-                            "rect": None,
-                            "slotted_in": None,
-                            "is_dragging": False,
-                        })
-                        player["ch3_dice_anim_until"] = (
-                            pygame.time.get_ticks() + 650
-                        )
-                    elif rank == "Private" and not player.get(
-                        "ch3_subverted_today"
-                    ):
-                        player["ch3_subverted_today"] = True
-                        player["silver"] += 5
-                        player["reputation"] -= 1
-                    continue
-
-                # 5. Commit Morning Orders -> Convert Unslotted Dice to 10 MP Each
-                if commit_rect and commit_rect.collidepoint(event.pos):
-                    has_slotted = any(
-                        d["slotted_in"] is not None for d in dice_list
-                    )
-                    if (
-                        player.get("ch3_confirm_phases", True)
-                        and not has_slotted
-                        and not player.get("_warned_empty_morning")
-                    ):
-                        player["_warned_empty_morning"] = True
-                        add_log(
-                            "No dice are slotted! Click 'Commit & Start "
-                            "March >>' again to convert all dice into MP."
+    
+                if menu_state in (
+                    "MAIN",
+                    "STATUS_MENU",
+                    "INVENTORY_MENU",
+                    "MINIGAME_WEATHER_REPORT",
+                ):
+                    if event.key == pygame.K_c:
+                        set_state(
+                            "MAIN"
+                            if menu_state == "STATUS_MENU"
+                            else "STATUS_MENU"
                         )
                         continue
-
-                    player["_warned_empty_morning"] = False
-                    if "ch3_factions" not in player:
+                    if event.key == pygame.K_i:
+                        set_state(
+                            "MAIN"
+                            if menu_state == "INVENTORY_MENU"
+                            else "INVENTORY_MENU"
+                        )
+                        continue
+                    if event.key == pygame.K_w:
+                        set_state(
+                            "MAIN"
+                            if menu_state == "MINIGAME_WEATHER_REPORT"
+                            else "MINIGAME_WEATHER_REPORT"
+                        )
+                        continue
+                    if event.key == pygame.K_t and menu_state == "MAIN":
+                        add_log(weather_engine.toggle_topo_map(player))
+                        continue
+                    if event.key == pygame.K_ESCAPE and menu_state != "MAIN":
+                        set_state("MAIN")
+                        continue
+    
+                # --- DEVELOPER SANDBOX HOTKEYS (F1 - F4) ---
+                if DEV_MODE:
+                    if event.key == pygame.K_F1:
+                        player["ch3_faction"] = player.get("ch3_faction", "Union")
+                        player["ch3_rank"] = player.get("ch3_rank", "General")
+                        player["ch3_world_bits"] = {
+                            f"track_{i}": 1 for i in range(1, 11)
+                        }
+                        for item in (
+                            "portable printing press",
+                            "codewheel",
+                            "war manual",
+                        ):
+                            if item not in player["inventory"]:
+                                player["inventory"].append(item)
                         player = ch3_war_engine.init_chapter_3_world_board(
                             player, world_map
                         )
-
-                    unslotted_cnt = sum(
-                        1 for d in dice_list if d["slotted_in"] is None
-                    )
-                    p_fac = player.get("ch3_faction", "Union")
-
-                    if player.get("ch3_rank") == "General":
-                        if not slots.get("supply_lines", {}).get("dice_objs"):
-                            player["global_morale"] = max(
-                                0, player.get("global_morale", 50) - 10
-                            )
-                        muster_dice = slots.get("muster_troops", {}).get(
-                            "dice_objs", []
+                        player = ui_renderer.init_ch3_morning_phase(player)
+                        set_state(
+                            "CH3_MORNING_PHASE",
+                            "[DEV F1] Initialised Chapter 3 Morning War Ledger.",
                         )
-                        dice_sum = sum(d["value"] for d in muster_dice)
-                        territories = player.get("territories", {})
-                        owned_tiles = sum(
-                            1
-                            for owner in territories.values()
-                            if owner == p_fac
-                        )
-                        if muster_dice:
-                            cap = (
-                                player.get("ch3_factions", {})
-                                .get(p_fac, {})
-                                .get("capital", "11,4")
+                        continue
+    
+                    if event.key == pygame.K_F2:
+                        if "ch3_factions" not in player:
+                            player = ch3_war_engine.init_chapter_3_world_board(
+                                player, world_map
                             )
-                            armies = player.setdefault("ch3_armies", {})
-                            gain_bns = max(1, (dice_sum // 2) + owned_tiles)
-                            if (
-                                cap in armies
-                                and armies[cap]["faction"] == p_fac
-                            ):
-                                armies[cap]["count"] += gain_bns
-                            else:
-                                armies[cap] = {
-                                    "faction": p_fac,
-                                    "count": gain_bns,
-                                }
-                            player["total_troops"] = (
-                                player.get("total_troops", 0) + gain_bns
-                            )
-
-                    elif player.get("ch3_rank") == "Captain":
-                        barricade_dice = slots.get(
-                            "build_barricades", {}
-                        ).get("dice_objs", [])
-                        if len(barricade_dice) == 2:
-                            player["local_barricades_active"] = True
-                            pos_k = f"{player['x']},{player['y']}"
-                            player.setdefault("ch3_barricades", {})[
-                                pos_k
-                            ] = True
-                    else:
-                        scrounge = slots.get("scrounge", {}).get(
-                            "dice_objs", []
+                        player["movement_points"] = 6
+                        ch3_war_engine.recalculate_ch3_total_points(player)
+                        set_state(
+                            "CH3_AFTERNOON_PHASE",
+                            "[DEV F2] Switched to Chapter 3 Strategic War Table.",
                         )
-                        if scrounge:
-                            player["inventory"].append("meat ration")
-
-                    # 10 MP per unslotted die (minimum 20 MP)
-                    player["movement_points"] = max(20, unslotted_cnt * 10)
-                    player["ch3_promoted_today"] = False
-                    player["ch3_subverted_today"] = False
-                    player["ch3_pending_clashes"] = []
-                    player["ch3_ai_turn_queue"] = []
-
-                    player.pop("ch3_morning_dice", None)
-                    player.pop("ch3_morning_slots", None)
-                    player["ch3_selected_die_id"] = None
-
-                    if (
-                        player.get("ch3_tutorial_active")
-                        and player.get("ch3_tutorial_step") in (4, 5, 6)
-                    ):
-                        player["ch3_tutorial_step"] = 7
-
+                        continue
+    
+                    if event.key == pygame.K_F3:
+                        if "ch3_factions" not in player:
+                            player = ch3_war_engine.init_chapter_3_world_board(
+                                player, world_map
+                            )
+                        att = {
+                            "faction": player.get("ch3_faction", "Union"),
+                            "count": 5,
+                        }
+                        dfn = {"faction": "Ragmore", "count": 4}
+                        player = ch3_combat_engine.init_ch3_evening_clash(
+                            player, att, dfn, "5,15", world_map
+                        )
+                        set_state(
+                            "CH3_EVENING_PHASE",
+                            "[DEV F3] Launched 3-Stage Stronghold Siege!",
+                        )
+                        continue
+    
+                    if event.key == pygame.K_F4:
+                        if "ch3_factions" not in player:
+                            player = ch3_war_engine.init_chapter_3_world_board(
+                                player, world_map
+                            )
+                        my_fac = player.get("ch3_faction", "Union")
+                        player["ch3_factions"][my_fac]["agenda_pts"] = 85
+                        is_over, winner = ch3_war_engine.check_ch3_endgame_trigger(
+                            player
+                        )
+                        if is_over and not player.get("_victory_recorded"):
+                            from mechanics import record_campaign_victory
+    
+                            record_campaign_victory(player, profile_name="noburu")
+                            player["_victory_recorded"] = True
+                        set_state(
+                            "CH3_EPILOGUE",
+                            f"[DEV F4] {winner} achieved 100 Hegemony Points!",
+                        )
+                        continue
+    
+            if menu_state == "MINIGAME_TYPESET":
+                printing_press_engine.handle_typeset_event(event, player)
+    
+            # --- PASS-AND-PLAY LOBBY & HERALDIC HANDOVER CURTAIN CLICKS ---
+            if menu_state == "PNP_LOBBY_MODAL":
+                handled_pnp, next_pnp = pass_and_play.handle_pnp_lobby_event(
+                    event, player, world_map, ui_renderer
+                )
+                if handled_pnp and next_pnp:
                     set_state(
-                        "CH3_AFTERNOON_PHASE",
-                        "Afternoon March: Select your Meeples, split "
-                        "detachments, and pin attacks across the board.",
+                        next_pnp,
+                        "Campaign & Pass-and-Play settings applied!",
                     )
-                    continue
-
-                # 6. Click-to-Slot Support
-                sel_id = player.get("ch3_selected_die_id")
-                if sel_id is not None and player.get(
-                    "ch3_click_to_slot", True
-                ):
-                    sel_die = next(
-                        (
-                            d
-                            for d in dice_list
-                            if d["id"] == sel_id and d["slotted_in"] is None
-                        ),
-                        None,
-                    )
-                    if sel_die:
-                        slotted_via_click = False
-                        for slot_id, slot_data in slots.items():
-                            if slot_data.get("rect") and slot_data[
-                                "rect"
-                            ].collidepoint(event.pos):
-                                req = slot_data.get("req")
-                                cur_objs = slot_data.setdefault(
-                                    "dice_objs", []
-                                )
-                                valid_drop = len(cur_objs) < 3
-                                if req is not None:
-                                    if (
-                                        isinstance(req, list)
-                                        and sel_die["value"] not in req
-                                    ):
-                                        valid_drop = False
-                                    elif req == "pair":
-                                        if (
-                                            len(cur_objs) == 1
-                                            and sel_die["value"]
-                                            != cur_objs[0]["value"]
-                                        ):
-                                            valid_drop = False
-                                        elif len(cur_objs) >= 2:
-                                            valid_drop = False
-                                if valid_drop:
-                                    sel_die["slotted_in"] = slot_id
-                                    cur_objs.append(sel_die)
-                                    player["ch3_selected_die_id"] = None
-                                    slotted_via_click = True
-                                    if (
-                                        player.get("ch3_tutorial_active")
-                                        and player.get("ch3_tutorial_step")
-                                        == 4
-                                    ):
-                                        player["ch3_tutorial_step"] = 5
-                                break
-                        if slotted_via_click:
-                            continue
-
-                # 7. Pick Up Unslotted Die from Felt Tray
-                for die_obj in dice_list:
+                continue
+    
+            if menu_state == "PNP_HANDOVER_CURTAIN":
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if pass_and_play.HANDOVER_BTN_RECT.collidepoint(event.pos):
+                        target_st = player.pop("pnp_resume_state", None)
+                        if not target_st:
+                            target_st = (
+                                "CH3_MORNING_PHASE"
+                                if pass_and_play.get_session().get("in_chapter_3")
+                                else "MAIN"
+                            )
+                        set_state(
+                            target_st,
+                            f"=== {player.get('pnp_player_name', 'Player')}'s "
+                            "Turn Begins! ===",
+                        )
+                continue
+    
+            # --- CHAPTER 3: TABLETOP SETTINGS, RULEBOOK & TUTORIAL MODALS ---
+            if menu_state == "CH3_SETTINGS_MODAL":
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    s_rects = player.get("ch3_settings_rects", {})
                     if (
-                        die_obj["slotted_in"] is None
-                        and die_obj.get("rect")
-                        and die_obj["rect"].collidepoint(event.pos)
+                        s_rects.get("open_pnp_lobby")
+                        and s_rects["open_pnp_lobby"].collidepoint(event.pos)
                     ):
-                        player["ch3_selected_die_id"] = die_obj["id"]
-                        die_obj["is_dragging"] = True
-                        die_obj["drag_offset_x"] = (
-                            die_obj["rect"].x - event.pos[0]
+                        set_state("PNP_LOBBY_MODAL")
+                    elif (
+                        s_rects.get("cycle_victory_mode")
+                        and s_rects["cycle_victory_mode"].collidepoint(event.pos)
+                    ):
+                        v_modes = ["100_PTS", "250_PTS", "DOMINATION"]
+                        cur_v = player.get("ch3_victory_mode", "100_PTS")
+                        nxt_v = (
+                            (v_modes.index(cur_v) + 1) % len(v_modes)
+                            if cur_v in v_modes
+                            else 0
                         )
-                        die_obj["drag_offset_y"] = (
-                            die_obj["rect"].y - event.pos[1]
+                        player["ch3_victory_mode"] = v_modes[nxt_v]
+                        ch3_war_engine.recalculate_ch3_total_points(player)
+                    elif (
+                        s_rects.get("cycle_month")
+                        and s_rects["cycle_month"].collidepoint(event.pos)
+                    ):
+                        player["current_month_idx"] = (
+                            player.get("current_month_idx", 1) + 1
+                        ) % 12
+                        weather_engine.update_weather_from_clock(player)
+                    elif (
+                        s_rects.get("toggle_tooltips")
+                        and s_rects["toggle_tooltips"].collidepoint(event.pos)
+                    ):
+                        player["ch3_show_tooltips"] = not player.get(
+                            "ch3_show_tooltips", True
                         )
-                        break
-
-            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                for die_obj in player.get("ch3_morning_dice", []):
-                    if die_obj.get("is_dragging"):
-                        die_obj["is_dragging"] = False
-                        for slot_id, slot_data in player.get(
-                            "ch3_morning_slots", {}
-                        ).items():
-                            if (
-                                slot_data.get("rect")
-                                and die_obj.get("rect")
-                                and slot_data["rect"].colliderect(
-                                    die_obj["rect"]
-                                )
-                            ):
-                                req = slot_data.get("req")
-                                cur_objs = slot_data.setdefault(
-                                    "dice_objs", []
-                                )
-                                valid_drop = len(cur_objs) < 3
-
-                                if req is not None:
-                                    if (
-                                        isinstance(req, list)
-                                        and die_obj["value"] not in req
-                                    ):
-                                        valid_drop = False
-                                    elif req == "pair":
-                                        if (
-                                            len(cur_objs) == 1
-                                            and die_obj["value"]
-                                            != cur_objs[0]["value"]
-                                        ):
-                                            valid_drop = False
-                                        elif len(cur_objs) >= 2:
-                                            valid_drop = False
-
-                                if valid_drop:
-                                    die_obj["slotted_in"] = slot_id
-                                    cur_objs.append(die_obj)
-                                    player["ch3_selected_die_id"] = None
-                                    if (
-                                        player.get("ch3_tutorial_active")
-                                        and player.get("ch3_tutorial_step")
-                                        == 4
-                                    ):
-                                        player["ch3_tutorial_step"] = 5
-                                break
-
-            elif event.type == pygame.MOUSEMOTION:
-                for die_obj in player.get("ch3_morning_dice", []):
-                    if die_obj.get("is_dragging") and die_obj.get("rect"):
-                        die_obj["rect"].x = event.pos[0] + die_obj.get(
-                            "drag_offset_x", 0
+                    elif (
+                        s_rects.get("toggle_show_ai")
+                        and s_rects["toggle_show_ai"].collidepoint(event.pos)
+                    ):
+                        player["ch3_show_ai_moves"] = not player.get(
+                            "ch3_show_ai_moves", True
                         )
-                        die_obj["rect"].y = event.pos[1] + die_obj.get(
-                            "drag_offset_y", 0
-                        )
-
-        # --- CHAPTER 3: AFTERNOON PHASE (SPLITTER, PINNING & AI BANNER) ---
-        elif menu_state == "CH3_AFTERNOON_PHASE":
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                # 1. If Heraldic AI Turn Banner is Active, Handle Its 3 Buttons
-                ai_queue = player.get("ch3_ai_turn_queue", [])
-                if ai_queue and player.get("ch3_show_ai_moves", True):
-                    n_rect = player.get("ch3_ai_next_rect")
-                    sp_rect = player.get("ch3_ai_speed_rect")
-                    sk_rect = player.get("ch3_ai_skip_rect")
-
-                    if sp_rect and sp_rect.collidepoint(event.pos):
+                    elif (
+                        s_rects.get("toggle_ai_pacing")
+                        and s_rects["toggle_ai_pacing"].collidepoint(event.pos)
+                    ):
                         modes = ["MANUAL", "SLOW", "NORMAL", "FAST"]
                         cur_p = player.get("ch3_ai_pacing", "NORMAL")
                         nxt_i = (
@@ -4352,31 +3928,618 @@ while True:
                             else 2
                         )
                         player["ch3_ai_pacing"] = modes[nxt_i]
-                        player["ch3_ai_step_timer"] = pygame.time.get_ticks()
-                        continue
-
-                    if sk_rect and sk_rect.collidepoint(event.pos):
-                        player["ch3_ai_turn_queue"] = []
-                    elif n_rect and n_rect.collidepoint(event.pos):
-                        ai_queue.pop(0)
-                        if ai_queue:
-                            ai_queue[0]["anim_start"] = pygame.time.get_ticks()
-                            player["ch3_ai_step_timer"] = (
-                                pygame.time.get_ticks()
+                    elif (
+                        s_rects.get("toggle_confirm")
+                        and s_rects["toggle_confirm"].collidepoint(event.pos)
+                    ):
+                        player["ch3_confirm_phases"] = not player.get(
+                            "ch3_confirm_phases", True
+                        )
+                    elif (
+                        s_rects.get("toggle_click_slot")
+                        and s_rects["toggle_click_slot"].collidepoint(event.pos)
+                    ):
+                        player["ch3_click_to_slot"] = not player.get(
+                            "ch3_click_to_slot", True
+                        )
+                    elif (
+                        s_rects.get("open_tutorial")
+                        and s_rects["open_tutorial"].collidepoint(event.pos)
+                    ):
+                        set_state("CH3_TUTORIAL_SELECT")
+                    elif (
+                        s_rects.get("open_rulebook")
+                        and s_rects["open_rulebook"].collidepoint(event.pos)
+                    ):
+                        set_state("CH3_RULEBOOK_MODAL")
+                    elif (
+                        s_rects.get("close_settings")
+                        and s_rects["close_settings"].collidepoint(event.pos)
+                    ):
+                        set_state(
+                            player.get("ch3_prev_modal_state", "CH3_MORNING_PHASE")
+                        )
+                continue
+    
+            elif menu_state == "CH3_RULEBOOK_MODAL":
+                handled_rb, next_rb = ch3_tutorial_book.handle_ch3_rulebook_event(
+                    event, player, world_map
+                )
+                if handled_rb and next_rb:
+                    set_state(next_rb)
+                continue
+    
+            elif menu_state == "CH3_TUTORIAL_SELECT":
+                handled_ts, next_ts = (
+                    ch3_tutorial_book.handle_ch3_tutorial_select_event(
+                        event, player, world_map
+                    )
+                )
+                if handled_ts and next_ts:
+                    set_state(next_ts)
+                continue
+    
+            # --- INTERCEPT TUTORIAL OVERLAY & CAMERA RAIL IN CH3 PHASES ---
+            if menu_state in (
+                "CH3_MORNING_PHASE",
+                "CH3_AFTERNOON_PHASE",
+                "CH3_EVENING_PHASE",
+            ):
+                t_click, t_exited = (
+                    ch3_tutorial_book.handle_tutorial_overlay_click(event, player)
+                )
+                if t_click:
+                    if t_exited:
+                        set_state("CH3_MORNING_PHASE", "Tutorial concluded.")
+                    continue
+    
+            if menu_state in ("CH3_MORNING_PHASE", "CH3_AFTERNOON_PHASE"):
+                cam_handled, cam_act = (
+                    ch3_board_renderer.handle_board_camera_event(event, player)
+                )
+                if cam_handled:
+                    if cam_act == "OPEN_CH3_SETTINGS":
+                        player["ch3_prev_modal_state"] = menu_state
+                        set_state("CH3_SETTINGS_MODAL")
+                    elif cam_act == "OPEN_CH3_RULEBOOK":
+                        player["ch3_prev_modal_state"] = menu_state
+                        set_state("CH3_RULEBOOK_MODAL")
+                    continue
+    
+            # --- CHAPTER 3: MORNING PHASE ---
+            if menu_state == "CH3_MORNING_PHASE":
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    commit_rect = player.get("ch3_commit_rect")
+                    excl_rect = player.get("ch3_exclusive_action_rect")
+                    dice_list = player.get("ch3_morning_dice", [])
+                    slots = player.get("ch3_morning_slots", {})
+                    rolled = player.get("ch3_dice_rolled_today", False)
+    
+                    # 1. Explicit Dawn Roll
+                    if not rolled:
+                        if commit_rect and commit_rect.collidepoint(event.pos):
+                            player["ch3_dice_rolled_today"] = True
+                            player["ch3_dice_anim_until"] = (
+                                pygame.time.get_ticks() + 800
                             )
-                            ch3_board_renderer.centre_camera_on_tile(
-                                player,
-                                ai_queue[0].get(
-                                    "to_pos", ai_queue[0].get("capital")
-                                ),
+                            if (
+                                player.get("ch3_tutorial_active")
+                                and player.get("ch3_tutorial_step") == 3
+                            ):
+                                player["ch3_tutorial_step"] = 4
+                        continue
+    
+                    # 2. Reversible Slotted Dice (Click Slotted Die -> Unslot!)
+                    unslotted_now = False
+                    for slot_data in slots.values():
+                        for d_obj, well_rect in list(
+                            slot_data.get("dice_rects", [])
+                        ):
+                            if well_rect.collidepoint(event.pos):
+                                d_obj["slotted_in"] = None
+                                if d_obj in slot_data.get("dice_objs", []):
+                                    slot_data["dice_objs"].remove(d_obj)
+                                player["ch3_selected_die_id"] = None
+                                player["_warned_empty_morning"] = False
+                                unslotted_now = True
+                                if (
+                                    player.get("ch3_tutorial_active")
+                                    and player.get("ch3_tutorial_step") == 5
+                                ):
+                                    player["ch3_tutorial_step"] = 6
+                                break
+                        if unslotted_now:
+                            break
+                    if unslotted_now:
+                        continue
+    
+                    # 3. Chapter 2 Specialist War-Table Tool Buttons
+                    tool_rects = player.get("ch3_tool_rects", {})
+                    clicked_tool = None
+                    for t_key, t_rect in tool_rects.items():
+                        if t_rect and t_rect.collidepoint(event.pos):
+                            clicked_tool = t_key
+                            break
+    
+                    if clicked_tool:
+                        msg = ch3_war_engine.execute_ch2_war_tool(
+                            player, clicked_tool, world_map
+                        )
+                        player["ch3_dice_anim_until"] = (
+                            pygame.time.get_ticks() + 650
+                        )
+                        add_log(msg)
+                        continue
+    
+                    # 4. Exclusive Rank Action Button
+                    if excl_rect and excl_rect.collidepoint(event.pos):
+                        rank = player.get("ch3_rank", "Private")
+                        if rank == "General":
+                            player["global_morale"] = max(
+                                0, player.get("global_morale", 50) - 10
+                            )
+                            player = ui_renderer.init_ch3_morning_phase(player)
+                            player["ch3_dice_rolled_today"] = True
+                            player["ch3_dice_anim_until"] = (
+                                pygame.time.get_ticks() + 800
+                            )
+                        elif rank == "Captain" and not player.get(
+                            "ch3_promoted_today"
+                        ):
+                            player["ch3_promoted_today"] = True
+                            dice_list.append({
+                                "id": len(dice_list),
+                                "value": 6,
+                                "rect": None,
+                                "slotted_in": None,
+                                "is_dragging": False,
+                            })
+                            player["ch3_dice_anim_until"] = (
+                                pygame.time.get_ticks() + 650
+                            )
+                        elif rank == "Private" and not player.get(
+                            "ch3_subverted_today"
+                        ):
+                            player["ch3_subverted_today"] = True
+                            player["silver"] += 5
+                            player["reputation"] -= 1
+                        continue
+    
+                    # 5. Commit Morning Orders -> Convert Unslotted Dice to 10 MP Each
+                    if commit_rect and commit_rect.collidepoint(event.pos):
+                        has_slotted = any(
+                            d["slotted_in"] is not None for d in dice_list
+                        )
+                        if (
+                            player.get("ch3_confirm_phases", True)
+                            and not has_slotted
+                            and not player.get("_warned_empty_morning")
+                        ):
+                            player["_warned_empty_morning"] = True
+                            add_log(
+                                "No dice are slotted! Click 'Commit & Start "
+                                "March >>' again to convert all dice into MP."
                             )
                             continue
-
-                    # If AI queue is now empty, proceed to Pinned Clashes or Dawn!
-                    if not player.get("ch3_ai_turn_queue"):
-                        ch3_board_renderer.centre_camera_on_player_forces(
-                            player
+    
+                        player["_warned_empty_morning"] = False
+                        if "ch3_factions" not in player:
+                            player = ch3_war_engine.init_chapter_3_world_board(
+                                player, world_map
+                            )
+    
+                        unslotted_cnt = sum(
+                            1 for d in dice_list if d["slotted_in"] is None
                         )
+                        p_fac = player.get("ch3_faction", "Union")
+    
+                        if player.get("ch3_rank") == "General":
+                            if not slots.get("supply_lines", {}).get("dice_objs"):
+                                player["global_morale"] = max(
+                                    0, player.get("global_morale", 50) - 10
+                                )
+                            muster_dice = slots.get("muster_troops", {}).get(
+                                "dice_objs", []
+                            )
+                            dice_sum = sum(d["value"] for d in muster_dice)
+                            territories = player.get("territories", {})
+                            owned_tiles = sum(
+                                1
+                                for owner in territories.values()
+                                if owner == p_fac
+                            )
+                            if muster_dice:
+                                cap = (
+                                    player.get("ch3_factions", {})
+                                    .get(p_fac, {})
+                                    .get("capital", "11,4")
+                                )
+                                armies = player.setdefault("ch3_armies", {})
+                                gain_bns = max(1, (dice_sum // 2) + owned_tiles)
+                                if (
+                                    cap in armies
+                                    and armies[cap]["faction"] == p_fac
+                                ):
+                                    armies[cap]["count"] += gain_bns
+                                else:
+                                    armies[cap] = {
+                                        "faction": p_fac,
+                                        "count": gain_bns,
+                                    }
+                                player["total_troops"] = (
+                                    player.get("total_troops", 0) + gain_bns
+                                )
+    
+                        elif player.get("ch3_rank") == "Captain":
+                            barricade_dice = slots.get(
+                                "build_barricades", {}
+                            ).get("dice_objs", [])
+                            if len(barricade_dice) == 2:
+                                player["local_barricades_active"] = True
+                                pos_k = f"{player['x']},{player['y']}"
+                                player.setdefault("ch3_barricades", {})[
+                                    pos_k
+                                ] = True
+                        else:
+                            scrounge = slots.get("scrounge", {}).get(
+                                "dice_objs", []
+                            )
+                            if scrounge:
+                                player["inventory"].append("meat ration")
+    
+                        # 10 MP per unslotted die (minimum 20 MP)
+                        player["movement_points"] = max(20, unslotted_cnt * 10)
+                        player["ch3_promoted_today"] = False
+                        player["ch3_subverted_today"] = False
+                        player["ch3_pending_clashes"] = []
+                        player["ch3_ai_turn_queue"] = []
+    
+                        player.pop("ch3_morning_dice", None)
+                        player.pop("ch3_morning_slots", None)
+                        player["ch3_selected_die_id"] = None
+    
+                        if (
+                            player.get("ch3_tutorial_active")
+                            and player.get("ch3_tutorial_step") in (4, 5, 6)
+                        ):
+                            player["ch3_tutorial_step"] = 7
+    
+                        set_state(
+                            "CH3_AFTERNOON_PHASE",
+                            "Afternoon March: Select your Meeples, split "
+                            "detachments, and pin attacks across the board.",
+                        )
+                        continue
+    
+                    # 6. Click-to-Slot Support
+                    sel_id = player.get("ch3_selected_die_id")
+                    if sel_id is not None and player.get(
+                        "ch3_click_to_slot", True
+                    ):
+                        sel_die = next(
+                            (
+                                d
+                                for d in dice_list
+                                if d["id"] == sel_id and d["slotted_in"] is None
+                            ),
+                            None,
+                        )
+                        if sel_die:
+                            slotted_via_click = False
+                            for slot_id, slot_data in slots.items():
+                                if slot_data.get("rect") and slot_data[
+                                    "rect"
+                                ].collidepoint(event.pos):
+                                    req = slot_data.get("req")
+                                    cur_objs = slot_data.setdefault(
+                                        "dice_objs", []
+                                    )
+                                    valid_drop = len(cur_objs) < 3
+                                    if req is not None:
+                                        if (
+                                            isinstance(req, list)
+                                            and sel_die["value"] not in req
+                                        ):
+                                            valid_drop = False
+                                        elif req == "pair":
+                                            if (
+                                                len(cur_objs) == 1
+                                                and sel_die["value"]
+                                                != cur_objs[0]["value"]
+                                            ):
+                                                valid_drop = False
+                                            elif len(cur_objs) >= 2:
+                                                valid_drop = False
+                                    if valid_drop:
+                                        sel_die["slotted_in"] = slot_id
+                                        cur_objs.append(sel_die)
+                                        player["ch3_selected_die_id"] = None
+                                        slotted_via_click = True
+                                        if (
+                                            player.get("ch3_tutorial_active")
+                                            and player.get("ch3_tutorial_step")
+                                            == 4
+                                        ):
+                                            player["ch3_tutorial_step"] = 5
+                                    break
+                            if slotted_via_click:
+                                continue
+    
+                    # 7. Pick Up Unslotted Die from Felt Tray
+                    for die_obj in dice_list:
+                        if (
+                            die_obj["slotted_in"] is None
+                            and die_obj.get("rect")
+                            and die_obj["rect"].collidepoint(event.pos)
+                        ):
+                            player["ch3_selected_die_id"] = die_obj["id"]
+                            die_obj["is_dragging"] = True
+                            die_obj["drag_offset_x"] = (
+                                die_obj["rect"].x - event.pos[0]
+                            )
+                            die_obj["drag_offset_y"] = (
+                                die_obj["rect"].y - event.pos[1]
+                            )
+                            break
+    
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    for die_obj in player.get("ch3_morning_dice", []):
+                        if die_obj.get("is_dragging"):
+                            die_obj["is_dragging"] = False
+                            for slot_id, slot_data in player.get(
+                                "ch3_morning_slots", {}
+                            ).items():
+                                if (
+                                    slot_data.get("rect")
+                                    and die_obj.get("rect")
+                                    and slot_data["rect"].colliderect(
+                                        die_obj["rect"]
+                                    )
+                                ):
+                                    req = slot_data.get("req")
+                                    cur_objs = slot_data.setdefault(
+                                        "dice_objs", []
+                                    )
+                                    valid_drop = len(cur_objs) < 3
+    
+                                    if req is not None:
+                                        if (
+                                            isinstance(req, list)
+                                            and die_obj["value"] not in req
+                                        ):
+                                            valid_drop = False
+                                        elif req == "pair":
+                                            if (
+                                                len(cur_objs) == 1
+                                                and die_obj["value"]
+                                                != cur_objs[0]["value"]
+                                            ):
+                                                valid_drop = False
+                                            elif len(cur_objs) >= 2:
+                                                valid_drop = False
+    
+                                    if valid_drop:
+                                        die_obj["slotted_in"] = slot_id
+                                        cur_objs.append(die_obj)
+                                        player["ch3_selected_die_id"] = None
+                                        if (
+                                            player.get("ch3_tutorial_active")
+                                            and player.get("ch3_tutorial_step")
+                                            == 4
+                                        ):
+                                            player["ch3_tutorial_step"] = 5
+                                    break
+    
+                elif event.type == pygame.MOUSEMOTION:
+                    for die_obj in player.get("ch3_morning_dice", []):
+                        if die_obj.get("is_dragging") and die_obj.get("rect"):
+                            die_obj["rect"].x = event.pos[0] + die_obj.get(
+                                "drag_offset_x", 0
+                            )
+                            die_obj["rect"].y = event.pos[1] + die_obj.get(
+                                "drag_offset_y", 0
+                            )
+    
+            # --- CHAPTER 3: AFTERNOON PHASE (SPLITTER, PINNING & AI BANNER) ---
+            elif menu_state == "CH3_AFTERNOON_PHASE":
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    # 1. If Heraldic AI Turn Banner is Active, Handle Its 3 Buttons
+                    ai_queue = player.get("ch3_ai_turn_queue", [])
+                    if ai_queue and player.get("ch3_show_ai_moves", True):
+                        n_rect = player.get("ch3_ai_next_rect")
+                        sp_rect = player.get("ch3_ai_speed_rect")
+                        sk_rect = player.get("ch3_ai_skip_rect")
+    
+                        if sp_rect and sp_rect.collidepoint(event.pos):
+                            modes = ["MANUAL", "SLOW", "NORMAL", "FAST"]
+                            cur_p = player.get("ch3_ai_pacing", "NORMAL")
+                            nxt_i = (
+                                (modes.index(cur_p) + 1) % len(modes)
+                                if cur_p in modes
+                                else 2
+                            )
+                            player["ch3_ai_pacing"] = modes[nxt_i]
+                            player["ch3_ai_step_timer"] = pygame.time.get_ticks()
+                            continue
+    
+                        if sk_rect and sk_rect.collidepoint(event.pos):
+                            player["ch3_ai_turn_queue"] = []
+                        elif n_rect and n_rect.collidepoint(event.pos):
+                            ai_queue.pop(0)
+                            if ai_queue:
+                                ai_queue[0]["anim_start"] = pygame.time.get_ticks()
+                                player["ch3_ai_step_timer"] = (
+                                    pygame.time.get_ticks()
+                                )
+                                ch3_board_renderer.centre_camera_on_tile(
+                                    player,
+                                    ai_queue[0].get(
+                                        "to_pos", ai_queue[0].get("capital")
+                                    ),
+                                )
+                                continue
+    
+                        # If AI queue is now empty, proceed to Pinned Clashes or Dawn!
+                        if not player.get("ch3_ai_turn_queue"):
+                            ch3_board_renderer.centre_camera_on_player_forces(
+                                player
+                            )
+                            pending = player.get("ch3_pending_clashes", [])
+                            if pending:
+                                first_c = pending.pop(0)
+                                player = ch3_combat_engine.init_ch3_evening_clash(
+                                    player,
+                                    first_c["attacker"],
+                                    first_c["defender"],
+                                    first_c["tile_pos"],
+                                    world_map,
+                                    origin_pos=first_c.get("origin_pos"),
+                                )
+                                set_state(
+                                    "CH3_EVENING_PHASE",
+                                    "Dusk falls: Resolving pinned engagements!",
+                                )
+                            else:
+                                player["ch3_day"] = player.get("ch3_day", 1) + 1
+                                player = ui_renderer.init_ch3_morning_phase(player)
+                                set_state(
+                                    "CH3_MORNING_PHASE",
+                                    f"Dawn breaks on Day {player['ch3_day']}.",
+                                )
+                        continue
+    
+                    # 2. Check Troop Detachment Splitter Buttons
+                    if (
+                        ch3_selected_army_pos
+                        and ch3_selected_army_pos in player.get("ch3_armies", {})
+                    ):
+                        tot_bns = max(
+                            1,
+                            player["ch3_armies"][ch3_selected_army_pos].get(
+                                "count", 1
+                            ),
+                        )
+                        cur_split = player.get("ch3_split_count", tot_bns)
+                        sp_rects = player.get("ch3_splitter_rects", {})
+                        clicked_sp = None
+                        for s_key, s_rect in sp_rects.items():
+                            if s_rect and s_rect.collidepoint(event.pos):
+                                clicked_sp = s_key
+                                break
+                        if clicked_sp:
+                            if clicked_sp == "minus":
+                                player["ch3_split_count"] = max(1, cur_split - 1)
+                            elif clicked_sp == "plus":
+                                player["ch3_split_count"] = min(
+                                    tot_bns, cur_split + 1
+                                )
+                            elif clicked_sp == "one":
+                                player["ch3_split_count"] = 1
+                            elif clicked_sp == "half":
+                                player["ch3_split_count"] = max(1, tot_bns // 2)
+                            elif clicked_sp == "all":
+                                player["ch3_split_count"] = tot_bns
+                            continue
+    
+                    # 3. Check Rank Command Deck Buttons
+                    rank_rects = player.get("ch3_rank_action_rects", {})
+                    clicked_rank_act = None
+                    for act_key, r_rect in rank_rects.items():
+                        if r_rect and r_rect.collidepoint(event.pos):
+                            clicked_rank_act = act_key
+                            break
+    
+                    if clicked_rank_act:
+                        if clicked_rank_act == "enter_field_mode":
+                            player, field_msg, next_st = (
+                                ch3_war_engine.start_private_afternoon_march(
+                                    player, world_map
+                                )
+                            )
+                            set_state(next_st, field_msg)
+                        elif clicked_rank_act == "fulfill_directive":
+                            player["ch3_confidence"] = min(
+                                100, player.get("ch3_confidence", 65) + 5
+                            )
+                        elif clicked_rank_act == "subvert_confidence":
+                            player["ch3_confidence"] = max(
+                                0, player.get("ch3_confidence", 65) - 20
+                            )
+                        else:
+                            my_f = player.get("ch3_faction", "Union")
+                            rivals = [
+                                f
+                                for f in ch3_war_engine.DTESSERA_FACTIONS
+                                if f != my_f
+                            ]
+                            target_f = player.get("ch3_selected_rival")
+                            if not target_f or target_f == my_f:
+                                target_f = rivals[0]
+                            msg = ch3_war_engine.execute_rank_political_action(
+                                player,
+                                clicked_rank_act,
+                                target_faction=target_f,
+                                world_map=world_map,
+                            )
+                            add_log(msg)
+                        continue
+    
+                    # 4. Check "Finish March & Watch AI >>" Button
+                    end_rect = player.get("ch3_end_march_rect")
+                    if end_rect and end_rect.collidepoint(event.pos):
+                        if (
+                            player.get("ch3_confirm_phases", True)
+                            and player.get("movement_points", 0) >= 6
+                            and not player.get("_warned_unspent_mp")
+                        ):
+                            player["_warned_unspent_mp"] = True
+                            player["ch3_daily_order"] = {
+                                "description": (
+                                    "You still have March Points left! Click "
+                                    "'Finish March' again to end your turn."
+                                )
+                            }
+                            continue
+    
+                        player["_warned_unspent_mp"] = False
+                        ch3_selected_army_pos = None
+                        player["_warned_unspent_mp"] = False
+                        ch3_selected_army_pos = None
+    
+                        # Pass-and-Play: Rotate to next Human Seat if more remain today!
+                        has_next_human, nxt_name, nxt_fac = (
+                            pass_and_play.advance_ch3_human_turn(player)
+                        )
+                        if has_next_human:
+                            player = ui_renderer.init_ch3_morning_phase(player)
+                            player["pnp_resume_state"] = "CH3_MORNING_PHASE"
+                            set_state(
+                                "PNP_HANDOVER_CURTAIN",
+                                f"Pass the mouse to {nxt_name} ({nxt_fac})!",
+                            )
+                            continue
+                        p_fac = player.get("ch3_faction", "Union")
+    
+                        # Generate AI turns now so player watches them live!
+                        player = ch3_war_engine.process_enemy_faction_turns(
+                            player, world_map
+                        )
+                        for ai_k, ai_d in player.get("ch3_factions", {}).items():
+                            if ai_k != p_fac and random.random() < 0.45:
+                                ch3_war_engine.apply_ai_agenda_balance_step(ai_d)
+    
+                        ai_q = player.get("ch3_ai_turn_queue", [])
+                        if player.get("ch3_show_ai_moves", True) and ai_q:
+                            ai_q[0]["anim_start"] = pygame.time.get_ticks()
+                            player["ch3_ai_step_timer"] = pygame.time.get_ticks()
+                            ch3_board_renderer.centre_camera_on_tile(
+                                player,
+                                ai_q[0].get("to_pos", ai_q[0].get("capital")),
+                            )
+                            continue
+    
+                        # If AI animations are toggled OFF, go straight to Clashes or Dawn
+                        player["ch3_ai_turn_queue"] = []
                         pending = player.get("ch3_pending_clashes", [])
                         if pending:
                             first_c = pending.pop(0)
@@ -4392,428 +4555,15 @@ while True:
                                 "CH3_EVENING_PHASE",
                                 "Dusk falls: Resolving pinned engagements!",
                             )
-                        else:
-                            player["ch3_day"] = player.get("ch3_day", 1) + 1
-                            player = ui_renderer.init_ch3_morning_phase(player)
-                            set_state(
-                                "CH3_MORNING_PHASE",
-                                f"Dawn breaks on Day {player['ch3_day']}.",
-                            )
-                    continue
-
-                # 2. Check Troop Detachment Splitter Buttons
-                if (
-                    ch3_selected_army_pos
-                    and ch3_selected_army_pos in player.get("ch3_armies", {})
-                ):
-                    tot_bns = max(
-                        1,
-                        player["ch3_armies"][ch3_selected_army_pos].get(
-                            "count", 1
-                        ),
-                    )
-                    cur_split = player.get("ch3_split_count", tot_bns)
-                    sp_rects = player.get("ch3_splitter_rects", {})
-                    clicked_sp = None
-                    for s_key, s_rect in sp_rects.items():
-                        if s_rect and s_rect.collidepoint(event.pos):
-                            clicked_sp = s_key
-                            break
-                    if clicked_sp:
-                        if clicked_sp == "minus":
-                            player["ch3_split_count"] = max(1, cur_split - 1)
-                        elif clicked_sp == "plus":
-                            player["ch3_split_count"] = min(
-                                tot_bns, cur_split + 1
-                            )
-                        elif clicked_sp == "one":
-                            player["ch3_split_count"] = 1
-                        elif clicked_sp == "half":
-                            player["ch3_split_count"] = max(1, tot_bns // 2)
-                        elif clicked_sp == "all":
-                            player["ch3_split_count"] = tot_bns
-                        continue
-
-                # 3. Check Rank Command Deck Buttons
-                rank_rects = player.get("ch3_rank_action_rects", {})
-                clicked_rank_act = None
-                for act_key, r_rect in rank_rects.items():
-                    if r_rect and r_rect.collidepoint(event.pos):
-                        clicked_rank_act = act_key
-                        break
-
-                if clicked_rank_act:
-                    if clicked_rank_act == "enter_field_mode":
-                        player, field_msg, next_st = (
-                            ch3_war_engine.start_private_afternoon_march(
-                                player, world_map
-                            )
-                        )
-                        set_state(next_st, field_msg)
-                    elif clicked_rank_act == "fulfill_directive":
-                        player["ch3_confidence"] = min(
-                            100, player.get("ch3_confidence", 65) + 5
-                        )
-                    elif clicked_rank_act == "subvert_confidence":
-                        player["ch3_confidence"] = max(
-                            0, player.get("ch3_confidence", 65) - 20
-                        )
-                    else:
-                        my_f = player.get("ch3_faction", "Union")
-                        rivals = [
-                            f
-                            for f in ch3_war_engine.DTESSERA_FACTIONS
-                            if f != my_f
-                        ]
-                        target_f = player.get("ch3_selected_rival")
-                        if not target_f or target_f == my_f:
-                            target_f = rivals[0]
-                        msg = ch3_war_engine.execute_rank_political_action(
-                            player,
-                            clicked_rank_act,
-                            target_faction=target_f,
-                            world_map=world_map,
-                        )
-                        add_log(msg)
-                    continue
-
-                # 4. Check "Finish March & Watch AI >>" Button
-                end_rect = player.get("ch3_end_march_rect")
-                if end_rect and end_rect.collidepoint(event.pos):
-                    if (
-                        player.get("ch3_confirm_phases", True)
-                        and player.get("movement_points", 0) >= 6
-                        and not player.get("_warned_unspent_mp")
-                    ):
-                        player["_warned_unspent_mp"] = True
-                        player["ch3_daily_order"] = {
-                            "description": (
-                                "You still have March Points left! Click "
-                                "'Finish March' again to end your turn."
-                            )
-                        }
-                        continue
-
-                    player["_warned_unspent_mp"] = False
-                    ch3_selected_army_pos = None
-                    player["_warned_unspent_mp"] = False
-                    ch3_selected_army_pos = None
-
-                    # Pass-and-Play: Rotate to next Human Seat if more remain today!
-                    has_next_human, nxt_name, nxt_fac = (
-                        pass_and_play.advance_ch3_human_turn(player)
-                    )
-                    if has_next_human:
-                        player = ui_renderer.init_ch3_morning_phase(player)
-                        player["pnp_resume_state"] = "CH3_MORNING_PHASE"
-                        set_state(
-                            "PNP_HANDOVER_CURTAIN",
-                            f"Pass the mouse to {nxt_name} ({nxt_fac})!",
-                        )
-                        continue
-                    p_fac = player.get("ch3_faction", "Union")
-
-                    # Generate AI turns now so player watches them live!
-                    player = ch3_war_engine.process_enemy_faction_turns(
-                        player, world_map
-                    )
-                    for ai_k, ai_d in player.get("ch3_factions", {}).items():
-                        if ai_k != p_fac and random.random() < 0.45:
-                            ch3_war_engine.apply_ai_agenda_balance_step(ai_d)
-
-                    ai_q = player.get("ch3_ai_turn_queue", [])
-                    if player.get("ch3_show_ai_moves", True) and ai_q:
-                        ai_q[0]["anim_start"] = pygame.time.get_ticks()
-                        player["ch3_ai_step_timer"] = pygame.time.get_ticks()
-                        ch3_board_renderer.centre_camera_on_tile(
-                            player,
-                            ai_q[0].get("to_pos", ai_q[0].get("capital")),
-                        )
-                        continue
-
-                    # If AI animations are toggled OFF, go straight to Clashes or Dawn
-                    player["ch3_ai_turn_queue"] = []
-                    pending = player.get("ch3_pending_clashes", [])
-                    if pending:
-                        first_c = pending.pop(0)
-                        player = ch3_combat_engine.init_ch3_evening_clash(
-                            player,
-                            first_c["attacker"],
-                            first_c["defender"],
-                            first_c["tile_pos"],
-                            world_map,
-                            origin_pos=first_c.get("origin_pos"),
-                        )
-                        set_state(
-                            "CH3_EVENING_PHASE",
-                            "Dusk falls: Resolving pinned engagements!",
-                        )
-                        continue
-
-                    is_over, winner = (
-                        ch3_war_engine.check_ch3_endgame_trigger(player)
-                    )
-                    if is_over:
-                        if not player.get("_victory_recorded"):
-                            from mechanics import record_campaign_victory
-
-                            record_campaign_victory(
-                                player, profile_name="noburu"
-                            )
-                            player["_victory_recorded"] = True
-                        set_state(
-                            "CH3_EPILOGUE",
-                            f"{winner} has achieved 100 Hegemony Points!",
-                        )
-                    else:
-                        player["ch3_day"] = player.get("ch3_day", 1) + 1
-                        player = ui_renderer.init_ch3_morning_phase(player)
-                        set_state(
-                            "CH3_MORNING_PHASE",
-                            f"Dawn breaks on Day {player['ch3_day']}.",
-                        )
-                    continue
-
-                # 5. Map Clearing Click: Select, Split, March, or Pin '⚔' Clash
-                clicked_pos = player.get("ch3_hovered_pos")
-                if clicked_pos:
-                    armies = player.setdefault("ch3_armies", {})
-                    my_fac = player.get("ch3_faction", "Union")
-
-                    if (
-                        clicked_pos in armies
-                        and armies[clicked_pos]["faction"] in (my_fac, "Player")
-                        and clicked_pos == ch3_selected_army_pos
-                    ):
-                        ch3_selected_army_pos = None
-                    elif (
-                        clicked_pos in armies
-                        and armies[clicked_pos]["faction"] in (my_fac, "Player")
-                        and not ch3_selected_army_pos
-                    ):
-                        ch3_selected_army_pos = clicked_pos
-                        player["ch3_split_count"] = armies[clicked_pos][
-                            "count"
-                        ]
-                    elif (
-                        ch3_selected_army_pos
-                        and ch3_selected_army_pos in armies
-                    ):
-                        start_x, start_y = map(
-                            int, ch3_selected_army_pos.split(",")
-                        )
-                        click_map_x, click_map_y = map(
-                            int, clicked_pos.split(",")
-                        )
-                        is_adjacent = (
-                            abs(click_map_x - start_x) <= 1
-                            and abs(click_map_y - start_y) <= 1
-                            and (click_map_x, click_map_y)
-                            != (start_x, start_y)
-                        )
-
-                        if (
-                            is_adjacent
-                            and (click_map_x, click_map_y) in world_map
-                        ):
-                            origin_army = armies[ch3_selected_army_pos]
-                            avail_cnt = max(1, origin_army.get("count", 1))
-                            split_cnt = max(
-                                1,
-                                min(
-                                    avail_cnt,
-                                    player.get("ch3_split_count", avail_cnt),
-                                ),
-                            )
-
-                            mp_cost, can_pass, hazard_warn = (
-                                ch3_war_engine.calculate_ch3_movement_cost(
-                                    player,
-                                    my_fac,
-                                    clicked_pos,
-                                    world_map,
-                                    troop_count=split_cnt,
-                                )
-                            )
-                            if not can_pass:
-                                player["ch3_daily_order"] = {
-                                    "description": f"MARCH HALTED: {hazard_warn}"
-                                }
-                                continue
-
-                            current_mp = player.get("movement_points", 0)
-                            march_ok = True
-
-                            if current_mp < mp_cost:
-                                forced_roll = random.randint(1, 6)
-                                player["movement_points"] = 0
-                                if forced_roll <= 2:
-                                    origin_army["count"] = max(
-                                        1, avail_cnt - 1
-                                    )
-                                    player["ch3_split_count"] = origin_army[
-                                        "count"
-                                    ]
-                                    player["ch3_daily_order"] = {
-                                        "description": (
-                                            "FORCED MARCH DISASTER (Rolled "
-                                            f"{forced_roll})! Lost 1 Bn."
-                                        )
-                                    }
-                                    march_ok = False
-                            else:
-                                player["movement_points"] -= mp_cost
-
-                            if march_ok:
-                                prev_origin = ch3_selected_army_pos
-                                if split_cnt < avail_cnt:
-                                    origin_army["count"] = (
-                                        avail_cnt - split_cnt
-                                    )
-                                    player["ch3_split_count"] = origin_army[
-                                        "count"
-                                    ]
-                                else:
-                                    armies.pop(ch3_selected_army_pos, None)
-                                    ch3_selected_army_pos = None
-
-                                moving_army = {
-                                    "faction": my_fac,
-                                    "count": split_cnt,
-                                }
-                                pinned_here = next(
-                                    (
-                                        c
-                                        for c in player.get(
-                                            "ch3_pending_clashes", []
-                                        )
-                                        if c["tile_pos"] == clicked_pos
-                                    ),
-                                    None,
-                                )
-
-                                # Case A: Reinforcing an existing pinned clash
-                                if pinned_here:
-                                    ch3_war_engine.pin_ch3_clash(
-                                        player,
-                                        clicked_pos,
-                                        moving_army,
-                                        pinned_here["defender"],
-                                        origin_pos=prev_origin,
-                                    )
-                                    continue
-
-                                # Case B: Stepping onto an enemy garrison -> Pin '⚔' Clash!
-                                if (
-                                    clicked_pos in armies
-                                    and armies[clicked_pos]["faction"]
-                                    != my_fac
-                                ):
-                                    def_army = armies.pop(clicked_pos)
-                                    if player.get("ch3_tutorial_active"):
-                                        player["ch3_tutorial_step"] = 9
-                                        player = ch3_combat_engine.init_ch3_evening_clash(
-                                            player,
-                                            moving_army,
-                                            def_army,
-                                            clicked_pos,
-                                            world_map,
-                                            origin_pos=prev_origin,
-                                        )
-                                        set_state(
-                                            "CH3_EVENING_PHASE",
-                                            "Your forces engage "
-                                            f"{def_army['faction']}!",
-                                        )
-                                    else:
-                                        ch3_war_engine.pin_ch3_clash(
-                                            player,
-                                            clicked_pos,
-                                            moving_army,
-                                            def_army,
-                                            origin_pos=prev_origin,
-                                        )
-                                    continue
-
-                                # Case C: Stepping onto friendly or empty clearing
-                                if (
-                                    clicked_pos in armies
-                                    and armies[clicked_pos]["faction"]
-                                    == my_fac
-                                ):
-                                    armies[clicked_pos]["count"] += (
-                                        moving_army["count"]
-                                    )
-                                else:
-                                    armies[clicked_pos] = moving_army
-                                player.setdefault("territories", {})[
-                                    clicked_pos
-                                ] = my_fac
-                                if not ch3_selected_army_pos:
-                                    ch3_selected_army_pos = clicked_pos
-                                    player["ch3_split_count"] = armies[
-                                        clicked_pos
-                                    ]["count"]
-                                ch3_war_engine.recalculate_ch3_total_points(
-                                    player
-                                )
-                        elif (
-                            clicked_pos in armies
-                            and armies[clicked_pos]["faction"]
-                            in (my_fac, "Player")
-                        ):
-                            ch3_selected_army_pos = clicked_pos
-                            player["ch3_split_count"] = armies[clicked_pos][
-                                "count"
-                            ]
-                        else:
-                            ch3_selected_army_pos = None
-
-        # --- CHAPTER 3: EVENING TACTICAL CLASH & MULTI-BATTLE QUEUE ---
-        elif menu_state == "CH3_EVENING_PHASE":
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                combat_rects = player.get("ch3_combat_action_rects", {})
-                clicked_combat_act = None
-
-                for act_key, c_rect in combat_rects.items():
-                    if c_rect and c_rect.collidepoint(event.pos):
-                        clicked_combat_act = act_key
-                        break
-
-                if clicked_combat_act:
-                    if clicked_combat_act == "press_assault" and player.get(
-                        "ch3_combat_resolved"
-                    ):
-                        if player.get("ch3_tutorial_active"):
-                            ch3_tutorial_book.end_faction_tutorial(player)
-                            set_state(
-                                "CH3_MORNING_PHASE",
-                                "Tutorial complete! Your real campaign has "
-                                "been restored.",
-                            )
                             continue
-
-                        # Pop next pinned '⚔' battle if more remain tonight!
-                        pending = player.get("ch3_pending_clashes", [])
-                        if pending:
-                            next_c = pending.pop(0)
-                            player = ch3_combat_engine.init_ch3_evening_clash(
-                                player,
-                                next_c["attacker"],
-                                next_c["defender"],
-                                next_c["tile_pos"],
-                                world_map,
-                                origin_pos=next_c.get("origin_pos"),
-                            )
-                            continue
-
+    
                         is_over, winner = (
                             ch3_war_engine.check_ch3_endgame_trigger(player)
                         )
                         if is_over:
                             if not player.get("_victory_recorded"):
                                 from mechanics import record_campaign_victory
-
+    
                                 record_campaign_victory(
                                     player, profile_name="noburu"
                                 )
@@ -4822,856 +4572,1118 @@ while True:
                                 "CH3_EPILOGUE",
                                 f"{winner} has achieved 100 Hegemony Points!",
                             )
+                        else:
+                            player["ch3_day"] = player.get("ch3_day", 1) + 1
+                            player = ui_renderer.init_ch3_morning_phase(player)
+                            set_state(
+                                "CH3_MORNING_PHASE",
+                                f"Dawn breaks on Day {player['ch3_day']}.",
+                            )
+                        continue
+    
+                    # 5. Map Clearing Click: Select, Split, March, or Pin '⚔' Clash
+                    clicked_pos = player.get("ch3_hovered_pos")
+                    if clicked_pos:
+                        armies = player.setdefault("ch3_armies", {})
+                        my_fac = player.get("ch3_faction", "Union")
+    
+                        if (
+                            clicked_pos in armies
+                            and armies[clicked_pos]["faction"] in (my_fac, "Player")
+                            and clicked_pos == ch3_selected_army_pos
+                        ):
+                            ch3_selected_army_pos = None
+                        elif (
+                            clicked_pos in armies
+                            and armies[clicked_pos]["faction"] in (my_fac, "Player")
+                            and not ch3_selected_army_pos
+                        ):
+                            ch3_selected_army_pos = clicked_pos
+                            player["ch3_split_count"] = armies[clicked_pos][
+                                "count"
+                            ]
+                        elif (
+                            ch3_selected_army_pos
+                            and ch3_selected_army_pos in armies
+                        ):
+                            start_x, start_y = map(
+                                int, ch3_selected_army_pos.split(",")
+                            )
+                            click_map_x, click_map_y = map(
+                                int, clicked_pos.split(",")
+                            )
+                            is_adjacent = (
+                                abs(click_map_x - start_x) <= 1
+                                and abs(click_map_y - start_y) <= 1
+                                and (click_map_x, click_map_y)
+                                != (start_x, start_y)
+                            )
+    
+                            if (
+                                is_adjacent
+                                and (click_map_x, click_map_y) in world_map
+                            ):
+                                origin_army = armies[ch3_selected_army_pos]
+                                avail_cnt = max(1, origin_army.get("count", 1))
+                                split_cnt = max(
+                                    1,
+                                    min(
+                                        avail_cnt,
+                                        player.get("ch3_split_count", avail_cnt),
+                                    ),
+                                )
+    
+                                mp_cost, can_pass, hazard_warn = (
+                                    ch3_war_engine.calculate_ch3_movement_cost(
+                                        player,
+                                        my_fac,
+                                        clicked_pos,
+                                        world_map,
+                                        troop_count=split_cnt,
+                                    )
+                                )
+                                if not can_pass:
+                                    player["ch3_daily_order"] = {
+                                        "description": f"MARCH HALTED: {hazard_warn}"
+                                    }
+                                    continue
+    
+                                current_mp = player.get("movement_points", 0)
+                                march_ok = True
+    
+                                if current_mp < mp_cost:
+                                    forced_roll = random.randint(1, 6)
+                                    player["movement_points"] = 0
+                                    if forced_roll <= 2:
+                                        origin_army["count"] = max(
+                                            1, avail_cnt - 1
+                                        )
+                                        player["ch3_split_count"] = origin_army[
+                                            "count"
+                                        ]
+                                        player["ch3_daily_order"] = {
+                                            "description": (
+                                                "FORCED MARCH DISASTER (Rolled "
+                                                f"{forced_roll})! Lost 1 Bn."
+                                            )
+                                        }
+                                        march_ok = False
+                                else:
+                                    player["movement_points"] -= mp_cost
+    
+                                if march_ok:
+                                    prev_origin = ch3_selected_army_pos
+                                    if split_cnt < avail_cnt:
+                                        origin_army["count"] = (
+                                            avail_cnt - split_cnt
+                                        )
+                                        player["ch3_split_count"] = origin_army[
+                                            "count"
+                                        ]
+                                    else:
+                                        armies.pop(ch3_selected_army_pos, None)
+                                        ch3_selected_army_pos = None
+    
+                                    moving_army = {
+                                        "faction": my_fac,
+                                        "count": split_cnt,
+                                    }
+                                    pinned_here = next(
+                                        (
+                                            c
+                                            for c in player.get(
+                                                "ch3_pending_clashes", []
+                                            )
+                                            if c["tile_pos"] == clicked_pos
+                                        ),
+                                        None,
+                                    )
+    
+                                    # Case A: Reinforcing an existing pinned clash
+                                    if pinned_here:
+                                        ch3_war_engine.pin_ch3_clash(
+                                            player,
+                                            clicked_pos,
+                                            moving_army,
+                                            pinned_here["defender"],
+                                            origin_pos=prev_origin,
+                                        )
+                                        continue
+    
+                                    # Case B: Stepping onto an enemy garrison -> Pin '⚔' Clash!
+                                    if (
+                                        clicked_pos in armies
+                                        and armies[clicked_pos]["faction"]
+                                        != my_fac
+                                    ):
+                                        def_army = armies.pop(clicked_pos)
+                                        if player.get("ch3_tutorial_active"):
+                                            player["ch3_tutorial_step"] = 9
+                                            player = ch3_combat_engine.init_ch3_evening_clash(
+                                                player,
+                                                moving_army,
+                                                def_army,
+                                                clicked_pos,
+                                                world_map,
+                                                origin_pos=prev_origin,
+                                            )
+                                            set_state(
+                                                "CH3_EVENING_PHASE",
+                                                "Your forces engage "
+                                                f"{def_army['faction']}!",
+                                            )
+                                        else:
+                                            ch3_war_engine.pin_ch3_clash(
+                                                player,
+                                                clicked_pos,
+                                                moving_army,
+                                                def_army,
+                                                origin_pos=prev_origin,
+                                            )
+                                        continue
+    
+                                    # Case C: Stepping onto friendly or empty clearing
+                                    if (
+                                        clicked_pos in armies
+                                        and armies[clicked_pos]["faction"]
+                                        == my_fac
+                                    ):
+                                        armies[clicked_pos]["count"] += (
+                                            moving_army["count"]
+                                        )
+                                    else:
+                                        armies[clicked_pos] = moving_army
+                                    player.setdefault("territories", {})[
+                                        clicked_pos
+                                    ] = my_fac
+                                    if not ch3_selected_army_pos:
+                                        ch3_selected_army_pos = clicked_pos
+                                        player["ch3_split_count"] = armies[
+                                            clicked_pos
+                                        ]["count"]
+                                    ch3_war_engine.recalculate_ch3_total_points(
+                                        player
+                                    )
+                            elif (
+                                clicked_pos in armies
+                                and armies[clicked_pos]["faction"]
+                                in (my_fac, "Player")
+                            ):
+                                ch3_selected_army_pos = clicked_pos
+                                player["ch3_split_count"] = armies[clicked_pos][
+                                    "count"
+                                ]
+                            else:
+                                ch3_selected_army_pos = None
+    
+            # --- CHAPTER 3: EVENING TACTICAL CLASH & MULTI-BATTLE QUEUE ---
+            elif menu_state == "CH3_EVENING_PHASE":
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    combat_rects = player.get("ch3_combat_action_rects", {})
+                    clicked_combat_act = None
+    
+                    for act_key, c_rect in combat_rects.items():
+                        if c_rect and c_rect.collidepoint(event.pos):
+                            clicked_combat_act = act_key
+                            break
+    
+                    if clicked_combat_act:
+                        if clicked_combat_act == "press_assault" and player.get(
+                            "ch3_combat_resolved"
+                        ):
+                            if player.get("ch3_tutorial_active"):
+                                ch3_tutorial_book.end_faction_tutorial(player)
+                                set_state(
+                                    "CH3_MORNING_PHASE",
+                                    "Tutorial complete! Your real campaign has "
+                                    "been restored.",
+                                )
+                                continue
+    
+                            # Pop next pinned '⚔' battle if more remain tonight!
+                            pending = player.get("ch3_pending_clashes", [])
+                            if pending:
+                                next_c = pending.pop(0)
+                                player = ch3_combat_engine.init_ch3_evening_clash(
+                                    player,
+                                    next_c["attacker"],
+                                    next_c["defender"],
+                                    next_c["tile_pos"],
+                                    world_map,
+                                    origin_pos=next_c.get("origin_pos"),
+                                )
+                                continue
+    
+                            is_over, winner = (
+                                ch3_war_engine.check_ch3_endgame_trigger(player)
+                            )
+                            if is_over:
+                                if not player.get("_victory_recorded"):
+                                    from mechanics import record_campaign_victory
+    
+                                    record_campaign_victory(
+                                        player, profile_name="noburu"
+                                    )
+                                    player["_victory_recorded"] = True
+                                set_state(
+                                    "CH3_EPILOGUE",
+                                    f"{winner} has achieved 100 Hegemony Points!",
+                                )
+                                continue
+    
+                            player["ch3_combat_active"] = False
+                            player["ch3_combat_resolved"] = False
+                            player["ch3_attacker"] = None
+                            player["ch3_defender"] = None
+                            player["ch3_combat_log"] = []
+                            player["ch3_day"] = player.get("ch3_day", 1) + 1
+                            player = ui_renderer.init_ch3_morning_phase(player)
+                            set_state(
+                                "CH3_MORNING_PHASE",
+                                f"Dawn breaks on Day {player['ch3_day']}.",
+                            )
+                        else:
+                            player, log_msg = (
+                                ch3_combat_engine.execute_ch3_combat_action(
+                                    player, clicked_combat_act
+                                )
+                            )
+                            if (
+                                player.get("ch3_tutorial_active")
+                                and clicked_combat_act
+                                not in ("roll_battle_dice", "press_assault")
+                            ):
+                                player["ch3_tutorial_step"] = 10
+                            add_log(log_msg)
+                        continue
+    
+            # --- CHAPTER 3: EPILOGUE CHRONICLE ---
+            elif menu_state == "CH3_EPILOGUE":
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    ep_rect = player.get("ch3_epilogue_btn_rect")
+                    if ep_rect and ep_rect.collidepoint(event.pos):
+                        set_state("VICTORY_GRID_MENU", "")
+                        continue
+    
+            # --- CHAPTER 3: HALL OF HEGEMONY (VICTORY GRID) ---
+            elif menu_state == "VICTORY_GRID_MENU":
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if pygame.Rect(145, 522, 245, 44).collidepoint(event.pos):
+                        player["_confirm_wipe_grid"] = False
+                        set_state("START_SCREEN", "")
+                        continue
+                    if pygame.Rect(410, 522, 245, 44).collidepoint(event.pos):
+                        if not player.get("_confirm_wipe_grid"):
+                            player["_confirm_wipe_grid"] = True
+                        else:
+                            from mechanics import wipe_profile_data
+    
+                            wipe_profile_data("noburu")
+                            player["_confirm_wipe_grid"] = False
+                        continue
+    
+            # Prevent Decimal Clock from intercepting clicks on full-screen modals
+            if menu_state not in (
+                "START_SCREEN",
+                "CHAPTER_1_INTRO",
+                "CASINO_BLACKJACK",
+                "CASINO_POKER",
+                "CASINO_ROULETTE",
+                "CASINO_CRAPS",
+                "MINIGAME_ARCHERY",
+                "MAP_VIEW",
+                "CH3_MORNING_PHASE",
+                "CH3_AFTERNOON_PHASE",
+                "CH3_EVENING_PHASE",
+                "CH3_EPILOGUE",
+                "VICTORY_GRID_MENU",
+                "INVENTORY_MENU",
+                "STATUS_MENU",
+                "SYSTEM_MENU",
+                "CHAPTER_2_COMPLETE",
+                "MINIGAME_BARGAIN",
+                "MINIGAME_BRAWL",
+                "MINIGAME_TRIBUNAL",
+                "MINIGAME_TRAITOR",
+                "MINIGAME_RIOT",
+                "MINIGAME_SEARCH",
+                "MINIGAME_DUNGEON",
+                "MINIGAME_TYPESET",
+                "MINIGAME_WEATHER_REPORT",
+                "MINIGAME_CODEWHEEL",
+                "MINIGAME_PONTIFEX",
+                "MINIGAME_GCHQ",
+            ):
+                if game_clock_ui.handle_event(event):
+                    continue
+    
+            if menu_state == "CASINO_POKER":
+                mini_games.handle_poker_input_event(event, player)
+            elif menu_state == "CASINO_ROULETTE":
+                mini_games.handle_roulette_event(event, player)
+            elif menu_state == "CASINO_CRAPS":
+                mini_games.handle_craps_event(event, player)
+            elif menu_state == "MINIGAME_ARCHERY":
+                player, arch_log, next_state = mini_games.handle_archery_event(
+                    event, player
+                )
+                if arch_log:
+                    add_log(arch_log)
+                if next_state != "MINIGAME_ARCHERY":
+                    set_state(next_state)
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                    continue
+    
+            if event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN):
+                if event.type == pygame.MOUSEMOTION:
+                    mouse_pos = event.pos
+                if (
+                    menu_state == "MINIGAME_BARGAIN"
+                    and player.get("bargain_phase") == "SLIDER_PLAYER"
+                ):
+                    is_drag = (
+                        event.type == pygame.MOUSEMOTION
+                        and pygame.mouse.get_pressed()[0]
+                    )
+                    is_click = (
+                        event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
+                    )
+                    if (
+                        is_drag or is_click
+                    ) and mini_games.BARGAIN_SLIDER_RECT.inflate(
+                        16, 18
+                    ).collidepoint(event.pos):
+                        d_id = player.get("bargain_selected_id")
+                        d_obj = next(
+                            (
+                                d
+                                for d in mini_games.BARGAIN_DEMANDS
+                                if d["id"] == d_id
+                            ),
+                            None,
+                        )
+                        if d_obj:
+                            min_v = 8 if d_id == "u_hours" else 0
+                            raw_pct = (
+                                event.pos[0] - mini_games.BARGAIN_SLIDER_RECT.x
+                            ) / float(mini_games.BARGAIN_SLIDER_RECT.width)
+                            clamped_pct = max(0.0, min(1.0, raw_pct))
+                            player["bargain_slider_val"] = int(
+                                round(
+                                    min_v + clamped_pct * (d_obj["max_val"] - min_v)
+                                )
+                            )
+    
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                button_clicked = False
+                if event.button == 1:
+                    for btn in all_active_buttons:
+                        if btn.handle_event(event):
+                            button_clicked = True
+                            break
+                if button_clicked:
+                    continue
+    
+                if menu_state == "MINIGAME_SEARCH":
+                    handled_s, s_log, s_next = (
+                        search_engine.handle_search_canvas_event(event, player)
+                    )
+                    if handled_s:
+                        if s_log:
+                            add_log(s_log)
+                        set_state(s_next)
+                        check_master_clock()
+                        continue
+    
+                if menu_state == "MINIGAME_JIGSAW":
+                    player, jigsaw_log, next_state = (
+                        mini_games.handle_jigsaw_event(event, player)
+                    )
+                    if jigsaw_log:
+                        add_log(jigsaw_log)
+                    if next_state != "MINIGAME_JIGSAW":
+                        set_state(next_state)
+                    continue
+    
+                elif menu_state == "MINIGAME_SOUNDING":
+                    player, sound_log, next_state = (
+                        mini_games.handle_sounding_event(event, player)
+                    )
+                    if sound_log:
+                        add_log(sound_log)
+                    if next_state != "MINIGAME_SOUNDING":
+                        set_state(next_state)
+                    if event.pos[1] < 390:
+                        continue
+    
+                elif menu_state == "MINIGAME_BREACH":
+                    player, breach_log, next_state = (
+                        mini_games.handle_breach_event(event, player)
+                    )
+                    if breach_log:
+                        add_log(breach_log)
+                    if next_state != "MINIGAME_BREACH":
+                        set_state(next_state)
+                    if event.pos[1] < 390:
+                        continue
+    
+                elif menu_state == "MINIGAME_DEDUCTION":
+                    player, deduct_log, next_state = (
+                        mini_games.handle_deduction_event(event, player)
+                    )
+                    if deduct_log:
+                        add_log(deduct_log)
+                    if next_state != "MINIGAME_DEDUCTION":
+                        set_state(next_state)
+                    if event.pos[1] < 390:
+                        continue
+    
+                elif menu_state == "MINIGAME_PARAPET":
+                    player, parapet_log, next_state = (
+                        mini_games.handle_parapet_event(event, player)
+                    )
+                    if parapet_log:
+                        add_log(parapet_log)
+                    if next_state != "MINIGAME_PARAPET":
+                        set_state(next_state)
+                    if event.pos[1] < 390:
+                        continue
+    
+                elif menu_state == "MINIGAME_FLYTIP":
+                    player, flytip_log, next_state = (
+                        mini_games.handle_flytip_event(event, player)
+                    )
+                    if flytip_log:
+                        add_log(flytip_log)
+                    if next_state != "MINIGAME_FLYTIP":
+                        set_state(next_state)
+                    if event.pos[1] < 390:
+                        continue
+    
+            if event.type == pygame.MOUSEWHEEL:
+                location_panel_ui.handle_scroll(mouse_pos, event.y)
+                log_panel_ui.handle_scroll(mouse_pos, event.y)
+    
+        # --- FULL-SCREEN RENDERS (TITLE, MAP, AND ALL CHAPTER 3 SCREENS) ---
+        if menu_state in ("START_SCREEN", "CHAPTER_1_INTRO"):
+            draw_title_or_intro_card(screen, menu_state)
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+            present_screen()
+            clock.tick(60)
+            continue
+    
+        if menu_state == "CHAPTER_2_COMPLETE":
+            if "ch3_world_summary" not in player:
+                rank, summary = evaluate_chapter_3_state(player)
+                player["ch3_rank"] = rank
+                player["ch3_world_summary"] = summary
+            meta_progression.draw_chapter_2_completion_card(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+            present_screen()
+            clock.tick(60)
+            continue
+    
+        if menu_state == "MAP_VIEW":
+            draw_cartographic_map(
+                screen, active_map_key, player, world_map, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+            present_screen()
+            clock.tick(60)
+            continue
+    
+        if menu_state == "CH3_MORNING_PHASE":
+            ui_renderer.draw_ch3_morning_ui(
+                screen, player, FONT, FONT_BOLD, world_map, mouse_pos
+            )
+            ch3_tutorial_book.draw_tutorial_spotlight_overlay(
+                screen, player, FONT_BOLD
+            )
+            present_screen()
+            clock.tick(60)
+            continue
+    
+        if menu_state == "CH3_AFTERNOON_PHASE":
+            ai_q = player.get("ch3_ai_turn_queue", [])
+            pacing = player.get("ch3_ai_pacing", "NORMAL")
+            if (
+                ai_q
+                and player.get("ch3_show_ai_moves", True)
+                and pacing in ("SLOW", "NORMAL", "FAST")
+            ):
+                delay_ms = {"SLOW": 1800, "NORMAL": 1150, "FAST": 500}[pacing]
+                now_t = pygame.time.get_ticks()
+                if now_t - player.get("ch3_ai_step_timer", now_t) >= delay_ms:
+                    ai_q.pop(0)
+                    player["ch3_ai_step_timer"] = now_t
+                    if ai_q:
+                        ai_q[0]["anim_start"] = now_t
+                        ch3_board_renderer.centre_camera_on_tile(
+                            player,
+                            ai_q[0].get("to_pos", ai_q[0].get("capital")),
+                        )
+                    else:
+                        ch3_board_renderer.centre_camera_on_player_forces(player)
+                        pending = player.get("ch3_pending_clashes", [])
+                        if pending:
+                            first_c = pending.pop(0)
+                            player = ch3_combat_engine.init_ch3_evening_clash(
+                                player,
+                                first_c["attacker"],
+                                first_c["defender"],
+                                first_c["tile_pos"],
+                                world_map,
+                                origin_pos=first_c.get("origin_pos"),
+                            )
+                            set_state(
+                                "CH3_EVENING_PHASE",
+                                "Dusk falls: Resolving pinned engagements!",
+                            )
                             continue
-
-                        player["ch3_combat_active"] = False
-                        player["ch3_combat_resolved"] = False
-                        player["ch3_attacker"] = None
-                        player["ch3_defender"] = None
-                        player["ch3_combat_log"] = []
                         player["ch3_day"] = player.get("ch3_day", 1) + 1
                         player = ui_renderer.init_ch3_morning_phase(player)
                         set_state(
                             "CH3_MORNING_PHASE",
                             f"Dawn breaks on Day {player['ch3_day']}.",
                         )
-                    else:
-                        player, log_msg = (
-                            ch3_combat_engine.execute_ch3_combat_action(
-                                player, clicked_combat_act
-                            )
-                        )
-                        if (
-                            player.get("ch3_tutorial_active")
-                            and clicked_combat_act
-                            not in ("roll_battle_dice", "press_assault")
-                        ):
-                            player["ch3_tutorial_step"] = 10
-                        add_log(log_msg)
-                    continue
-
-        # --- CHAPTER 3: EPILOGUE CHRONICLE ---
-        elif menu_state == "CH3_EPILOGUE":
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                ep_rect = player.get("ch3_epilogue_btn_rect")
-                if ep_rect and ep_rect.collidepoint(event.pos):
-                    set_state("VICTORY_GRID_MENU", "")
-                    continue
-
-        # --- CHAPTER 3: HALL OF HEGEMONY (VICTORY GRID) ---
-        elif menu_state == "VICTORY_GRID_MENU":
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if pygame.Rect(145, 522, 245, 44).collidepoint(event.pos):
-                    player["_confirm_wipe_grid"] = False
-                    set_state("START_SCREEN", "")
-                    continue
-                if pygame.Rect(410, 522, 245, 44).collidepoint(event.pos):
-                    if not player.get("_confirm_wipe_grid"):
-                        player["_confirm_wipe_grid"] = True
-                    else:
-                        from mechanics import wipe_profile_data
-
-                        wipe_profile_data("noburu")
-                        player["_confirm_wipe_grid"] = False
-                    continue
-
-        # Prevent Decimal Clock from intercepting clicks on full-screen modals
-        if menu_state not in (
-            "START_SCREEN",
-            "CHAPTER_1_INTRO",
+                        continue
+    
+            ui_renderer.draw_ch3_afternoon_ui(
+                screen,
+                player,
+                world_map,
+                FONT,
+                FONT_BOLD,
+                ch3_cam_x,
+                ch3_cam_y,
+                ch3_zoom,
+                mouse_pos,
+                ch3_selected_army_pos,
+            )
+            ch3_tutorial_book.draw_tutorial_spotlight_overlay(
+                screen, player, FONT_BOLD
+            )
+            present_screen()
+            clock.tick(60)
+            continue
+    
+        if menu_state == "CH3_EVENING_PHASE":
+            ui_renderer.draw_ch3_evening_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            ch3_tutorial_book.draw_tutorial_spotlight_overlay(
+                screen, player, FONT_BOLD
+            )
+            present_screen()
+            clock.tick(60)
+            continue
+    
+        if menu_state == "CH3_SETTINGS_MODAL":
+            ui_renderer.draw_ch3_morning_ui(
+                screen, player, FONT, FONT_BOLD, world_map, mouse_pos
+            )
+            ui_renderer.draw_ch3_settings_modal(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            present_screen()
+            clock.tick(60)
+            continue
+    
+        if menu_state == "CH3_RULEBOOK_MODAL":
+            ui_renderer.draw_ch3_morning_ui(
+                screen, player, FONT, FONT_BOLD, world_map, mouse_pos
+            )
+            ch3_tutorial_book.draw_ch3_rulebook_modal(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            present_screen()
+            clock.tick(60)
+            continue
+    
+        if menu_state == "CH3_TUTORIAL_SELECT":
+            ui_renderer.draw_ch3_morning_ui(
+                screen, player, FONT, FONT_BOLD, world_map, mouse_pos
+            )
+            ch3_tutorial_book.draw_ch3_tutorial_select_modal(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            present_screen()
+            clock.tick(60)
+            continue
+    
+        if menu_state == "PNP_LOBBY_MODAL":
+            if pass_and_play.get_session().get("in_chapter_3"):
+                ui_renderer.draw_ch3_morning_ui(
+                    screen, player, FONT, FONT_BOLD, world_map, mouse_pos
+                )
+            pass_and_play.draw_pnp_lobby_modal(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            present_screen()
+            clock.tick(60)
+            continue
+    
+        if menu_state == "PNP_HANDOVER_CURTAIN":
+            pass_and_play.draw_pnp_handover_curtain(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            present_screen()
+            clock.tick(60)
+            continue
+        
+        if menu_state == "CH3_EPILOGUE":
+            ui_renderer.draw_ch3_epilogue_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            present_screen()
+            clock.tick(60)
+            continue
+    
+        if menu_state == "VICTORY_GRID_MENU":
+            ui_renderer.draw_victory_grid_ui(
+                screen, FONT, FONT_BOLD, mouse_pos, player
+            )
+            present_screen()
+            clock.tick(60)
+            continue
+    
+        # --- STANDARD CHAPTER 1 & 2 RPG RENDER ---
+        visual_backdrop.draw_world_backdrop(screen, player, world_map)
+        weather_engine.draw_weather_and_darkness_overlay(
+            screen, player, FONT, FONT_BOLD, mouse_pos
+        )
+        weather_engine.draw_topographic_contour_overlay(screen, player, world_map)
+    
+        loc_typewriter_idx += 4
+        total_log_chars = sum(len(str(line)) for line in log_history)
+        if log_typewriter_idx < total_log_chars:
+            log_typewriter_idx += 4
+    
+        current_loc = None
+        owner = None
+        if player["current_building"]:
+            current_loc = player["current_building"]
+            loc_name = db.building_database[player["current_building"]]["name"]
+            loc_desc = db.building_database[player["current_building"]][
+                "description"
+            ]
+        else:
+            pos = (player["x"], player["y"])
+            current_loc = pos
+            if pos in world_map:
+                owner = get_tile_territory(player, pos[0], pos[1])
+                loc_name = world_map[pos].name
+                loc_desc = world_map[pos].description
+                current_day = (player["total_game_minutes"] // 1000) + 1
+                if player["rosinante_last_fed_day"] == current_day or player.get(
+                    "rosinante_fed"
+                ):
+                    loc_desc = loc_desc.replace(" It looks hungry.", "").replace(
+                        "It looks hungry.", ""
+                    )
+            else:
+                loc_name = "Unmapped Wilderness"
+                loc_desc = "You have wandered into the unmapped wilderness."
+    
+        if current_loc == (7, 15):
+            if db.npc_database["horse"]["location"] == (7, 15):
+                current_day = (player["total_game_minutes"] // 1000) + 1
+                if player.get("rosinante_last_fed_day") == current_day:
+                    loc_desc += (
+                        "\nOne horse stands tethered to a pole outside, munching "
+                        "contentedly on the remnants of its snack."
+                    )
+                else:
+                    loc_desc += (
+                        "\nOne horse stands tethered to a pole outside, eating "
+                        "some hay and awaiting attention. It looks hungry."
+                    )
+            else:
+                loc_desc += (
+                    "\nA pole stands upright, a tether blowing in the wind, and "
+                    "a pile of half eaten hay at its base."
+                )
+    
+        people_here = [
+            db.npc_database[npc_id]["proper_name"]
+            for npc_id in get_npcs_at_current_location()
+        ]
+        if people_here:
+            loc_desc += f"\nYou see people: {', '.join(people_here)}."
+    
+        if not player["current_building"] and current_loc in world_map:
+            display_objects = [
+                obj
+                for obj in world_map[current_loc].objects
+                if obj.lower() != "horse"
+            ]
+            if display_objects:
+                loc_desc += f" You see objects: {', '.join(display_objects)}"
+    
+        if current_loc in [(7, 15), "stables", "tack room", "stable loft"]:
+            if player.get(
+                "active_blacksmith_task"
+            ) == "stables_fire_rescue" and not player.get("fire_extinguished"):
+                loc_desc = (
+                    "*** THE BARN IS ON FIRE! Thick, choking black smoke billows "
+                    "from the stalls! ***\n\n" + loc_desc
+                )
+    
+        if menu_state.startswith("MINIGAME_") or menu_state.startswith("CASINO_"):
+            log_panel_ui.rect = pygame.Rect(40, 164, 408, 218)
+        else:
+            log_panel_ui.rect = pygame.Rect(40, 164, 720, 204)
+    
+        location_panel_ui.draw_location_panel(
+            screen, loc_name, loc_desc, loc_typewriter_idx, territory_owner=owner
+        )
+        log_panel_ui.draw_log_panel(screen, log_history, log_typewriter_idx)
+    
+        cur_pos = (player["x"], player["y"])
+        blind_in_forest = (
+            player.get("current_building") is None
+            and cur_pos in world_map
+            and world_map[cur_pos].region == "The Forest"
+            and "compass" not in player.get("inventory", [])
+            and "carved yew wayfinder" not in player.get("inventory", [])
+        )
+        for btn in dpad_buttons:
+            btn.enabled = menu_state == "MAIN"
+            btn.show_labels = not blind_in_forest
+    
+        for btn in all_active_buttons:
+            btn.draw(screen, mouse_pos)
+    
+        # --- COMPACT STATUS HUD BAR ABOVE DECIMAL CLOCK ---
+        hud_font = pygame.font.Font(None, 18)
+        curr_w = get_inventory_weight(player)
+        max_w = get_max_carry_weight(player)
+        hud_line1 = (
+            f"HP: {player['health']}/{player['max_health']}  |  "
+            f"Silver: {player['silver']}s  |  Wt: {curr_w}/{max_w}"
+        )
+        hud_line2 = (
+            f"Food: {player['hunger']:.0f}%  |  "
+            f"Water: {player['thirst']:.0f}%  |  Rep: {player['reputation']}"
+        )
+        screen.blit(hud_font.render(hud_line1, True, TEXT_COLOR), (32, 392))
+        screen.blit(hud_font.render(hud_line2, True, TEXT_MUTED), (32, 410))
+    
+        badges = []
+        if player.get("afflictions"):
+            badges.append("[ILL/POISONED]")
+        if curr_w > max_w:
+            badges.append("[HEAVY]")
+        if player.get("horse_stabled"):
+            badges.append(f"[STABLE TAB: {get_stabling_debt(player)}s]")
+        if badges:
+            screen.blit(
+                hud_font.render(" ".join(badges), True, (235, 95, 95)), (32, 428)
+            )
+    
+        game_clock_ui.draw(screen, player["total_game_minutes"], LOCATION_ACCENT)
+        pass_and_play.draw_pnp_turn_hud_pill(screen, player, FONT_BOLD)
+    
+        # --- MINIGAME UI OVERLAYS ---
+        if menu_state == "MINIGAME_FORGE":
+            mini_games.draw_forge_ui(screen, player, FONT, FONT_BOLD)
+        elif menu_state == "MINIGAME_JIGSAW":
+            mini_games.draw_jigsaw_ui(screen, player, FONT, FONT_BOLD)
+        elif menu_state == "MINIGAME_CHASE":
+            mini_games.draw_chase_ui(screen, player, FONT, FONT_BOLD)
+        elif menu_state == "MINIGAME_SOUNDING":
+            mini_games.draw_sounding_ui(screen, player, FONT, FONT_BOLD)
+        elif menu_state == "MINIGAME_BREACH":
+            mini_games.draw_breach_ui(screen, player, FONT, FONT_BOLD)
+        elif menu_state == "MINIGAME_DEDUCTION":
+            mini_games.draw_deduction_ui(screen, player, FONT, FONT_BOLD)
+        elif menu_state == "MINIGAME_PARAPET":
+            mini_games.draw_parapet_ui(screen, player, FONT, FONT_BOLD)
+        elif menu_state == "MINIGAME_SMUGGLE":
+            mini_games.draw_smuggle_ui(screen, player, FONT, FONT_BOLD)
+        elif menu_state == "MINIGAME_RECIPE":
+            mini_games.draw_recipe_ui(screen, player, FONT, FONT_BOLD)
+        elif menu_state == "MINIGAME_FLYTIP":
+            mini_games.draw_flytip_ui(screen, player, FONT, FONT_BOLD)
+        elif menu_state == "MINIGAME_DRILL":
+            mini_games.draw_drill_ui(screen, player, FONT, FONT_BOLD)
+        elif menu_state == "MINIGAME_DEBATE":
+            mini_games.draw_debate_ui(screen, player, FONT, FONT_BOLD)
+    
+        if menu_state in (
             "CASINO_BLACKJACK",
             "CASINO_POKER",
             "CASINO_ROULETTE",
             "CASINO_CRAPS",
-            "MINIGAME_ARCHERY",
-            "MAP_VIEW",
-            "CH3_MORNING_PHASE",
-            "CH3_AFTERNOON_PHASE",
-            "CH3_EVENING_PHASE",
-            "CH3_EPILOGUE",
-            "VICTORY_GRID_MENU",
-            "INVENTORY_MENU",
-            "STATUS_MENU",
-            "SYSTEM_MENU",
-            "CHAPTER_2_COMPLETE",
-            "MINIGAME_BARGAIN",
-            "MINIGAME_BRAWL",
-            "MINIGAME_TRIBUNAL",
-            "MINIGAME_TRAITOR",
-            "MINIGAME_RIOT",
-            "MINIGAME_SEARCH",
-            "MINIGAME_DUNGEON",
-            "MINIGAME_TYPESET",
-            "MINIGAME_WEATHER_REPORT",
-            "MINIGAME_CODEWHEEL",
-            "MINIGAME_PONTIFEX",
-            "MINIGAME_GCHQ",
         ):
-            if game_clock_ui.handle_event(event):
-                continue
-
-        if menu_state == "CASINO_POKER":
-            mini_games.handle_poker_input_event(event, player)
-        elif menu_state == "CASINO_ROULETTE":
-            mini_games.handle_roulette_event(event, player)
-        elif menu_state == "CASINO_CRAPS":
-            mini_games.handle_craps_event(event, player)
-        elif menu_state == "MINIGAME_ARCHERY":
-            player, arch_log, next_state = mini_games.handle_archery_event(
-                event, player
+            mini_games.draw_casino_card_table(
+                screen, player, FONT, FONT_BOLD, TITLE_FONT, menu_state
             )
-            if arch_log:
-                add_log(arch_log)
+            for btn in all_active_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_ARCHERY":
+            mini_games.draw_archery_ui(
+                screen, player, FONT, FONT_BOLD, TITLE_FONT
+            )
+            for btn in all_active_buttons:
+                btn.draw(screen, mouse_pos)
+    
+        # --- POPUPS ---
+        if menu_state == "STATUS_MENU":
+            ui_renderer.draw_status_popup(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "INVENTORY_MENU":
+            ui_renderer.draw_inventory_popup(
+                screen, player, mouse_pos, FONT, FONT_BOLD
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "SYSTEM_MENU":
+            ui_renderer.draw_help_popup(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_BARGAIN":
+            mini_games.draw_bargain_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_BRAWL":
+            ch2_union.draw_brawl_ui(screen, player, FONT, FONT_BOLD, mouse_pos)
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_TRIBUNAL":
+            ch2_union.draw_tribunal_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_TRAITOR":
+            ch2_union.draw_traitor_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_RIOT":
+            ch2_guard.draw_riot_ui(screen, player, FONT, FONT_BOLD, mouse_pos)
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_STRIKE_CORDON":
+            ch2_guard.draw_strike_cordon_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_CONVOY":
+            ch2_guard.draw_convoy_ui(screen, player, FONT, FONT_BOLD, mouse_pos)
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_WATCH_SPLIT":
+            ch2_guard.draw_watch_split_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_HERDING":
+            ch2_castellan.draw_herding_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_HUNT":
+            ch2_castellan.draw_hunt_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_LANCERS":
+            ch2_castellan.draw_lancers_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_SUMMIT":
+            ch2_castellan.draw_summit_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_LEVY":
+            ch2_castellan.draw_levy_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_DUNGEON":
+            ch2_dungeons.draw_dungeon_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_PARVUS":
+            ch2_parvus.draw_parvus_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_ELECTION":
+            ch2_election.draw_election_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_ROGUERY":
+            ch2_roguery.draw_roguery_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_SEARCH":
+            search_engine.draw_search_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_TRACK_TABLE":
+            meta_progression.draw_track_requirements_table_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_CODEWHEEL":
+            cryptography_engine.draw_codewheel_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_PONTIFEX":
+            cryptography_engine.draw_pontifex_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_GCHQ":
+            cryptography_engine.draw_gchq_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+                
+        elif menu_state == "MINIGAME_TYPESET":
+            printing_press_engine.draw_typeset_ui(
+                screen, player, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+        elif menu_state == "MINIGAME_WEATHER_REPORT":
+            weather_engine.draw_weather_report_modal(
+                screen, player, world_map, FONT, FONT_BOLD, mouse_pos
+            )
+            for btn in right_buttons:
+                btn.draw(screen, mouse_pos)
+    
+        present_screen()
+    
+        # --- REAL-TIME ENGINE TICK ---
+        dt = clock.tick(60) / 1000.0
+    
+        if menu_state == "MINIGAME_FORGE":
+            player, mini_log, next_state = mini_games.update_forge_timer(
+                player, dt
+            )
+            if mini_log:
+                add_log(mini_log)
+            if next_state != "MINIGAME_FORGE":
+                set_state(next_state)
+    
+        elif menu_state == "MINIGAME_CHASE":
+            player, mini_log, next_state = mini_games.update_chase_timer(
+                player, dt
+            )
+            if mini_log:
+                add_log(mini_log)
+            if next_state != "MINIGAME_CHASE":
+                if next_state == "NPC_DIALOGUE":
+                    selected_target = "market manager"
+                set_state(next_state)
+    
+        elif menu_state == "MINIGAME_JIGSAW" and player.get("arcade_mode"):
+            player, mini_log, next_state = mini_games.update_jigsaw_timer(
+                player, dt
+            )
+            if mini_log:
+                add_log(mini_log)
+            if next_state != "MINIGAME_JIGSAW":
+                set_state(next_state)
+    
+        elif menu_state == "MINIGAME_RECIPE" and player.get("arcade_mode"):
+            player, mini_log, next_state = mini_games.update_recipe_timer(
+                player, dt
+            )
+            if mini_log:
+                add_log(mini_log)
+            if next_state != "MINIGAME_RECIPE":
+                set_state(next_state)
+    
+        elif menu_state == "MINIGAME_FLYTIP" and player.get("arcade_mode"):
+            player, mini_log, next_state = mini_games.update_flytip_timer(
+                player, dt
+            )
+            if mini_log:
+                add_log(mini_log)
+            if next_state != "MINIGAME_FLYTIP":
+                set_state(next_state)
+    
+        elif menu_state == "MINIGAME_SOUNDING" and player.get("arcade_mode"):
+            player, mini_log, next_state = mini_games.update_sounding_timer(
+                player, dt
+            )
+            if mini_log:
+                add_log(mini_log)
+            if next_state != "MINIGAME_SOUNDING":
+                set_state(next_state)
+    
+        elif menu_state == "MINIGAME_ARCHERY":
+            player, mini_log, next_state = mini_games.update_archery_timer(
+                player, dt
+            )
+            if mini_log:
+                add_log(mini_log)
             if next_state != "MINIGAME_ARCHERY":
                 set_state(next_state)
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-                continue
-
-        if event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN):
-            if event.type == pygame.MOUSEMOTION:
-                mouse_pos = event.pos
-            if (
-                menu_state == "MINIGAME_BARGAIN"
-                and player.get("bargain_phase") == "SLIDER_PLAYER"
-            ):
-                is_drag = (
-                    event.type == pygame.MOUSEMOTION
-                    and pygame.mouse.get_pressed()[0]
-                )
-                is_click = (
-                    event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
-                )
-                if (
-                    is_drag or is_click
-                ) and mini_games.BARGAIN_SLIDER_RECT.inflate(
-                    16, 18
-                ).collidepoint(event.pos):
-                    d_id = player.get("bargain_selected_id")
-                    d_obj = next(
-                        (
-                            d
-                            for d in mini_games.BARGAIN_DEMANDS
-                            if d["id"] == d_id
-                        ),
-                        None,
-                    )
-                    if d_obj:
-                        min_v = 8 if d_id == "u_hours" else 0
-                        raw_pct = (
-                            event.pos[0] - mini_games.BARGAIN_SLIDER_RECT.x
-                        ) / float(mini_games.BARGAIN_SLIDER_RECT.width)
-                        clamped_pct = max(0.0, min(1.0, raw_pct))
-                        player["bargain_slider_val"] = int(
-                            round(
-                                min_v + clamped_pct * (d_obj["max_val"] - min_v)
-                            )
-                        )
-
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            button_clicked = False
-            if event.button == 1:
-                for btn in all_active_buttons:
-                    if btn.handle_event(event):
-                        button_clicked = True
-                        break
-            if button_clicked:
-                continue
-
-            if menu_state == "MINIGAME_SEARCH":
-                handled_s, s_log, s_next = (
-                    search_engine.handle_search_canvas_event(event, player)
-                )
-                if handled_s:
-                    if s_log:
-                        add_log(s_log)
-                    set_state(s_next)
-                    check_master_clock()
-                    continue
-
-            if menu_state == "MINIGAME_JIGSAW":
-                player, jigsaw_log, next_state = (
-                    mini_games.handle_jigsaw_event(event, player)
-                )
-                if jigsaw_log:
-                    add_log(jigsaw_log)
-                if next_state != "MINIGAME_JIGSAW":
-                    set_state(next_state)
-                continue
-
-            elif menu_state == "MINIGAME_SOUNDING":
-                player, sound_log, next_state = (
-                    mini_games.handle_sounding_event(event, player)
-                )
-                if sound_log:
-                    add_log(sound_log)
-                if next_state != "MINIGAME_SOUNDING":
-                    set_state(next_state)
-                if event.pos[1] < 390:
-                    continue
-
-            elif menu_state == "MINIGAME_BREACH":
-                player, breach_log, next_state = (
-                    mini_games.handle_breach_event(event, player)
-                )
-                if breach_log:
-                    add_log(breach_log)
-                if next_state != "MINIGAME_BREACH":
-                    set_state(next_state)
-                if event.pos[1] < 390:
-                    continue
-
-            elif menu_state == "MINIGAME_DEDUCTION":
-                player, deduct_log, next_state = (
-                    mini_games.handle_deduction_event(event, player)
-                )
-                if deduct_log:
-                    add_log(deduct_log)
-                if next_state != "MINIGAME_DEDUCTION":
-                    set_state(next_state)
-                if event.pos[1] < 390:
-                    continue
-
-            elif menu_state == "MINIGAME_PARAPET":
-                player, parapet_log, next_state = (
-                    mini_games.handle_parapet_event(event, player)
-                )
-                if parapet_log:
-                    add_log(parapet_log)
-                if next_state != "MINIGAME_PARAPET":
-                    set_state(next_state)
-                if event.pos[1] < 390:
-                    continue
-
-            elif menu_state == "MINIGAME_FLYTIP":
-                player, flytip_log, next_state = (
-                    mini_games.handle_flytip_event(event, player)
-                )
-                if flytip_log:
-                    add_log(flytip_log)
-                if next_state != "MINIGAME_FLYTIP":
-                    set_state(next_state)
-                if event.pos[1] < 390:
-                    continue
-
-        if event.type == pygame.MOUSEWHEEL:
-            location_panel_ui.handle_scroll(mouse_pos, event.y)
-            log_panel_ui.handle_scroll(mouse_pos, event.y)
-
-    # --- FULL-SCREEN RENDERS (TITLE, MAP, AND ALL CHAPTER 3 SCREENS) ---
-    if menu_state in ("START_SCREEN", "CHAPTER_1_INTRO"):
-        draw_title_or_intro_card(screen, menu_state)
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-        present_screen()
-        clock.tick(60)
-        continue
-
-    if menu_state == "CHAPTER_2_COMPLETE":
-        if "ch3_world_summary" not in player:
-            rank, summary = evaluate_chapter_3_state(player)
-            player["ch3_rank"] = rank
-            player["ch3_world_summary"] = summary
-        meta_progression.draw_chapter_2_completion_card(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-        present_screen()
-        clock.tick(60)
-        continue
-
-    if menu_state == "MAP_VIEW":
-        draw_cartographic_map(
-            screen, active_map_key, player, world_map, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-        present_screen()
-        clock.tick(60)
-        continue
-
-    if menu_state == "CH3_MORNING_PHASE":
-        ui_renderer.draw_ch3_morning_ui(
-            screen, player, FONT, FONT_BOLD, world_map, mouse_pos
-        )
-        ch3_tutorial_book.draw_tutorial_spotlight_overlay(
-            screen, player, FONT_BOLD
-        )
-        present_screen()
-        clock.tick(60)
-        continue
-
-    if menu_state == "CH3_AFTERNOON_PHASE":
-        ai_q = player.get("ch3_ai_turn_queue", [])
-        pacing = player.get("ch3_ai_pacing", "NORMAL")
-        if (
-            ai_q
-            and player.get("ch3_show_ai_moves", True)
-            and pacing in ("SLOW", "NORMAL", "FAST")
-        ):
-            delay_ms = {"SLOW": 1800, "NORMAL": 1150, "FAST": 500}[pacing]
-            now_t = pygame.time.get_ticks()
-            if now_t - player.get("ch3_ai_step_timer", now_t) >= delay_ms:
-                ai_q.pop(0)
-                player["ch3_ai_step_timer"] = now_t
-                if ai_q:
-                    ai_q[0]["anim_start"] = now_t
-                    ch3_board_renderer.centre_camera_on_tile(
-                        player,
-                        ai_q[0].get("to_pos", ai_q[0].get("capital")),
-                    )
-                else:
-                    ch3_board_renderer.centre_camera_on_player_forces(player)
-                    pending = player.get("ch3_pending_clashes", [])
-                    if pending:
-                        first_c = pending.pop(0)
-                        player = ch3_combat_engine.init_ch3_evening_clash(
-                            player,
-                            first_c["attacker"],
-                            first_c["defender"],
-                            first_c["tile_pos"],
-                            world_map,
-                            origin_pos=first_c.get("origin_pos"),
-                        )
-                        set_state(
-                            "CH3_EVENING_PHASE",
-                            "Dusk falls: Resolving pinned engagements!",
-                        )
-                        continue
-                    player["ch3_day"] = player.get("ch3_day", 1) + 1
-                    player = ui_renderer.init_ch3_morning_phase(player)
-                    set_state(
-                        "CH3_MORNING_PHASE",
-                        f"Dawn breaks on Day {player['ch3_day']}.",
-                    )
-                    continue
-
-        ui_renderer.draw_ch3_afternoon_ui(
-            screen,
-            player,
-            world_map,
-            FONT,
-            FONT_BOLD,
-            ch3_cam_x,
-            ch3_cam_y,
-            ch3_zoom,
-            mouse_pos,
-            ch3_selected_army_pos,
-        )
-        ch3_tutorial_book.draw_tutorial_spotlight_overlay(
-            screen, player, FONT_BOLD
-        )
-        present_screen()
-        clock.tick(60)
-        continue
-
-    if menu_state == "CH3_EVENING_PHASE":
-        ui_renderer.draw_ch3_evening_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        ch3_tutorial_book.draw_tutorial_spotlight_overlay(
-            screen, player, FONT_BOLD
-        )
-        present_screen()
-        clock.tick(60)
-        continue
-
-    if menu_state == "CH3_SETTINGS_MODAL":
-        ui_renderer.draw_ch3_morning_ui(
-            screen, player, FONT, FONT_BOLD, world_map, mouse_pos
-        )
-        ui_renderer.draw_ch3_settings_modal(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        present_screen()
-        clock.tick(60)
-        continue
-
-    if menu_state == "CH3_RULEBOOK_MODAL":
-        ui_renderer.draw_ch3_morning_ui(
-            screen, player, FONT, FONT_BOLD, world_map, mouse_pos
-        )
-        ch3_tutorial_book.draw_ch3_rulebook_modal(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        present_screen()
-        clock.tick(60)
-        continue
-
-    if menu_state == "CH3_TUTORIAL_SELECT":
-        ui_renderer.draw_ch3_morning_ui(
-            screen, player, FONT, FONT_BOLD, world_map, mouse_pos
-        )
-        ch3_tutorial_book.draw_ch3_tutorial_select_modal(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        present_screen()
-        clock.tick(60)
-        continue
-
-    if menu_state == "PNP_LOBBY_MODAL":
-        if pass_and_play.get_session().get("in_chapter_3"):
-            ui_renderer.draw_ch3_morning_ui(
-                screen, player, FONT, FONT_BOLD, world_map, mouse_pos
-            )
-        pass_and_play.draw_pnp_lobby_modal(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        present_screen()
-        clock.tick(60)
-        continue
-
-    if menu_state == "PNP_HANDOVER_CURTAIN":
-        pass_and_play.draw_pnp_handover_curtain(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        present_screen()
-        clock.tick(60)
-        continue
     
-    if menu_state == "CH3_EPILOGUE":
-        ui_renderer.draw_ch3_epilogue_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        present_screen()
-        clock.tick(60)
-        continue
-
-    if menu_state == "VICTORY_GRID_MENU":
-        ui_renderer.draw_victory_grid_ui(
-            screen, FONT, FONT_BOLD, mouse_pos, player
-        )
-        present_screen()
-        clock.tick(60)
-        continue
-
-    # --- STANDARD CHAPTER 1 & 2 RPG RENDER ---
-    visual_backdrop.draw_world_backdrop(screen, player, world_map)
-    weather_engine.draw_weather_and_darkness_overlay(
-        screen, player, FONT, FONT_BOLD, mouse_pos
-    )
-    weather_engine.draw_topographic_contour_overlay(screen, player, world_map)
-
-    loc_typewriter_idx += 4
-    total_log_chars = sum(len(str(line)) for line in log_history)
-    if log_typewriter_idx < total_log_chars:
-        log_typewriter_idx += 4
-
-    current_loc = None
-    owner = None
-    if player["current_building"]:
-        current_loc = player["current_building"]
-        loc_name = db.building_database[player["current_building"]]["name"]
-        loc_desc = db.building_database[player["current_building"]][
-            "description"
-        ]
-    else:
-        pos = (player["x"], player["y"])
-        current_loc = pos
-        if pos in world_map:
-            owner = get_tile_territory(player, pos[0], pos[1])
-            loc_name = world_map[pos].name
-            loc_desc = world_map[pos].description
-            current_day = (player["total_game_minutes"] // 1000) + 1
-            if player["rosinante_last_fed_day"] == current_day or player.get(
-                "rosinante_fed"
-            ):
-                loc_desc = loc_desc.replace(" It looks hungry.", "").replace(
-                    "It looks hungry.", ""
-                )
-        else:
-            loc_name = "Unmapped Wilderness"
-            loc_desc = "You have wandered into the unmapped wilderness."
-
-    if current_loc == (7, 15):
-        if db.npc_database["horse"]["location"] == (7, 15):
-            current_day = (player["total_game_minutes"] // 1000) + 1
-            if player.get("rosinante_last_fed_day") == current_day:
-                loc_desc += (
-                    "\nOne horse stands tethered to a pole outside, munching "
-                    "contentedly on the remnants of its snack."
-                )
-            else:
-                loc_desc += (
-                    "\nOne horse stands tethered to a pole outside, eating "
-                    "some hay and awaiting attention. It looks hungry."
-                )
-        else:
-            loc_desc += (
-                "\nA pole stands upright, a tether blowing in the wind, and "
-                "a pile of half eaten hay at its base."
+        elif menu_state == "MINIGAME_DRILL":
+            player, mini_log, next_state = mini_games.update_drill_timer(
+                player, dt
             )
-
-    people_here = [
-        db.npc_database[npc_id]["proper_name"]
-        for npc_id in get_npcs_at_current_location()
-    ]
-    if people_here:
-        loc_desc += f"\nYou see people: {', '.join(people_here)}."
-
-    if not player["current_building"] and current_loc in world_map:
-        display_objects = [
-            obj
-            for obj in world_map[current_loc].objects
-            if obj.lower() != "horse"
-        ]
-        if display_objects:
-            loc_desc += f" You see objects: {', '.join(display_objects)}"
-
-    if current_loc in [(7, 15), "stables", "tack room", "stable loft"]:
-        if player.get(
-            "active_blacksmith_task"
-        ) == "stables_fire_rescue" and not player.get("fire_extinguished"):
-            loc_desc = (
-                "*** THE BARN IS ON FIRE! Thick, choking black smoke billows "
-                "from the stalls! ***\n\n" + loc_desc
+            if mini_log:
+                add_log(mini_log)
+            if next_state != "MINIGAME_DRILL":
+                set_state(next_state)
+    
+        elif menu_state == "MINIGAME_DEBATE":
+            player, mini_log, next_state = mini_games.update_debate_timer(
+                player, dt
             )
+            if mini_log:
+                add_log(mini_log)
+            if next_state != "MINIGAME_DEBATE":
+                set_state(next_state)
 
-    if menu_state.startswith("MINIGAME_") or menu_state.startswith("CASINO_"):
-        log_panel_ui.rect = pygame.Rect(40, 164, 408, 218)
-    else:
-        log_panel_ui.rect = pygame.Rect(40, 164, 720, 204)
+        await asyncio.sleep(0)
 
-    location_panel_ui.draw_location_panel(
-        screen, loc_name, loc_desc, loc_typewriter_idx, territory_owner=owner
-    )
-    log_panel_ui.draw_log_panel(screen, log_history, log_typewriter_idx)
 
-    cur_pos = (player["x"], player["y"])
-    blind_in_forest = (
-        player.get("current_building") is None
-        and cur_pos in world_map
-        and world_map[cur_pos].region == "The Forest"
-        and "compass" not in player.get("inventory", [])
-        and "carved yew wayfinder" not in player.get("inventory", [])
-    )
-    for btn in dpad_buttons:
-        btn.enabled = menu_state == "MAIN"
-        btn.show_labels = not blind_in_forest
-
-    for btn in all_active_buttons:
-        btn.draw(screen, mouse_pos)
-
-    # --- COMPACT STATUS HUD BAR ABOVE DECIMAL CLOCK ---
-    hud_font = pygame.font.Font(None, 18)
-    curr_w = get_inventory_weight(player)
-    max_w = get_max_carry_weight(player)
-    hud_line1 = (
-        f"HP: {player['health']}/{player['max_health']}  |  "
-        f"Silver: {player['silver']}s  |  Wt: {curr_w}/{max_w}"
-    )
-    hud_line2 = (
-        f"Food: {player['hunger']:.0f}%  |  "
-        f"Water: {player['thirst']:.0f}%  |  Rep: {player['reputation']}"
-    )
-    screen.blit(hud_font.render(hud_line1, True, TEXT_COLOR), (32, 392))
-    screen.blit(hud_font.render(hud_line2, True, TEXT_MUTED), (32, 410))
-
-    badges = []
-    if player.get("afflictions"):
-        badges.append("[ILL/POISONED]")
-    if curr_w > max_w:
-        badges.append("[HEAVY]")
-    if player.get("horse_stabled"):
-        badges.append(f"[STABLE TAB: {get_stabling_debt(player)}s]")
-    if badges:
-        screen.blit(
-            hud_font.render(" ".join(badges), True, (235, 95, 95)), (32, 428)
-        )
-
-    game_clock_ui.draw(screen, player["total_game_minutes"], LOCATION_ACCENT)
-    pass_and_play.draw_pnp_turn_hud_pill(screen, player, FONT_BOLD)
-
-    # --- MINIGAME UI OVERLAYS ---
-    if menu_state == "MINIGAME_FORGE":
-        mini_games.draw_forge_ui(screen, player, FONT, FONT_BOLD)
-    elif menu_state == "MINIGAME_JIGSAW":
-        mini_games.draw_jigsaw_ui(screen, player, FONT, FONT_BOLD)
-    elif menu_state == "MINIGAME_CHASE":
-        mini_games.draw_chase_ui(screen, player, FONT, FONT_BOLD)
-    elif menu_state == "MINIGAME_SOUNDING":
-        mini_games.draw_sounding_ui(screen, player, FONT, FONT_BOLD)
-    elif menu_state == "MINIGAME_BREACH":
-        mini_games.draw_breach_ui(screen, player, FONT, FONT_BOLD)
-    elif menu_state == "MINIGAME_DEDUCTION":
-        mini_games.draw_deduction_ui(screen, player, FONT, FONT_BOLD)
-    elif menu_state == "MINIGAME_PARAPET":
-        mini_games.draw_parapet_ui(screen, player, FONT, FONT_BOLD)
-    elif menu_state == "MINIGAME_SMUGGLE":
-        mini_games.draw_smuggle_ui(screen, player, FONT, FONT_BOLD)
-    elif menu_state == "MINIGAME_RECIPE":
-        mini_games.draw_recipe_ui(screen, player, FONT, FONT_BOLD)
-    elif menu_state == "MINIGAME_FLYTIP":
-        mini_games.draw_flytip_ui(screen, player, FONT, FONT_BOLD)
-    elif menu_state == "MINIGAME_DRILL":
-        mini_games.draw_drill_ui(screen, player, FONT, FONT_BOLD)
-    elif menu_state == "MINIGAME_DEBATE":
-        mini_games.draw_debate_ui(screen, player, FONT, FONT_BOLD)
-
-    if menu_state in (
-        "CASINO_BLACKJACK",
-        "CASINO_POKER",
-        "CASINO_ROULETTE",
-        "CASINO_CRAPS",
-    ):
-        mini_games.draw_casino_card_table(
-            screen, player, FONT, FONT_BOLD, TITLE_FONT, menu_state
-        )
-        for btn in all_active_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_ARCHERY":
-        mini_games.draw_archery_ui(
-            screen, player, FONT, FONT_BOLD, TITLE_FONT
-        )
-        for btn in all_active_buttons:
-            btn.draw(screen, mouse_pos)
-
-    # --- POPUPS ---
-    if menu_state == "STATUS_MENU":
-        ui_renderer.draw_status_popup(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "INVENTORY_MENU":
-        ui_renderer.draw_inventory_popup(
-            screen, player, mouse_pos, FONT, FONT_BOLD
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "SYSTEM_MENU":
-        ui_renderer.draw_help_popup(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_BARGAIN":
-        mini_games.draw_bargain_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_BRAWL":
-        ch2_union.draw_brawl_ui(screen, player, FONT, FONT_BOLD, mouse_pos)
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_TRIBUNAL":
-        ch2_union.draw_tribunal_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_TRAITOR":
-        ch2_union.draw_traitor_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_RIOT":
-        ch2_guard.draw_riot_ui(screen, player, FONT, FONT_BOLD, mouse_pos)
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_STRIKE_CORDON":
-        ch2_guard.draw_strike_cordon_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_CONVOY":
-        ch2_guard.draw_convoy_ui(screen, player, FONT, FONT_BOLD, mouse_pos)
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_WATCH_SPLIT":
-        ch2_guard.draw_watch_split_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_HERDING":
-        ch2_castellan.draw_herding_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_HUNT":
-        ch2_castellan.draw_hunt_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_LANCERS":
-        ch2_castellan.draw_lancers_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_SUMMIT":
-        ch2_castellan.draw_summit_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_LEVY":
-        ch2_castellan.draw_levy_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_DUNGEON":
-        ch2_dungeons.draw_dungeon_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_PARVUS":
-        ch2_parvus.draw_parvus_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_ELECTION":
-        ch2_election.draw_election_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_ROGUERY":
-        ch2_roguery.draw_roguery_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_SEARCH":
-        search_engine.draw_search_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_TRACK_TABLE":
-        meta_progression.draw_track_requirements_table_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_CODEWHEEL":
-        cryptography_engine.draw_codewheel_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_PONTIFEX":
-        cryptography_engine.draw_pontifex_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_GCHQ":
-        cryptography_engine.draw_gchq_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-            
-    elif menu_state == "MINIGAME_TYPESET":
-        printing_press_engine.draw_typeset_ui(
-            screen, player, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-    elif menu_state == "MINIGAME_WEATHER_REPORT":
-        weather_engine.draw_weather_report_modal(
-            screen, player, world_map, FONT, FONT_BOLD, mouse_pos
-        )
-        for btn in right_buttons:
-            btn.draw(screen, mouse_pos)
-
-    present_screen()
-
-    # --- REAL-TIME ENGINE TICK ---
-    dt = clock.tick(60) / 1000.0
-
-    if menu_state == "MINIGAME_FORGE":
-        player, mini_log, next_state = mini_games.update_forge_timer(
-            player, dt
-        )
-        if mini_log:
-            add_log(mini_log)
-        if next_state != "MINIGAME_FORGE":
-            set_state(next_state)
-
-    elif menu_state == "MINIGAME_CHASE":
-        player, mini_log, next_state = mini_games.update_chase_timer(
-            player, dt
-        )
-        if mini_log:
-            add_log(mini_log)
-        if next_state != "MINIGAME_CHASE":
-            if next_state == "NPC_DIALOGUE":
-                selected_target = "market manager"
-            set_state(next_state)
-
-    elif menu_state == "MINIGAME_JIGSAW" and player.get("arcade_mode"):
-        player, mini_log, next_state = mini_games.update_jigsaw_timer(
-            player, dt
-        )
-        if mini_log:
-            add_log(mini_log)
-        if next_state != "MINIGAME_JIGSAW":
-            set_state(next_state)
-
-    elif menu_state == "MINIGAME_RECIPE" and player.get("arcade_mode"):
-        player, mini_log, next_state = mini_games.update_recipe_timer(
-            player, dt
-        )
-        if mini_log:
-            add_log(mini_log)
-        if next_state != "MINIGAME_RECIPE":
-            set_state(next_state)
-
-    elif menu_state == "MINIGAME_FLYTIP" and player.get("arcade_mode"):
-        player, mini_log, next_state = mini_games.update_flytip_timer(
-            player, dt
-        )
-        if mini_log:
-            add_log(mini_log)
-        if next_state != "MINIGAME_FLYTIP":
-            set_state(next_state)
-
-    elif menu_state == "MINIGAME_SOUNDING" and player.get("arcade_mode"):
-        player, mini_log, next_state = mini_games.update_sounding_timer(
-            player, dt
-        )
-        if mini_log:
-            add_log(mini_log)
-        if next_state != "MINIGAME_SOUNDING":
-            set_state(next_state)
-
-    elif menu_state == "MINIGAME_ARCHERY":
-        player, mini_log, next_state = mini_games.update_archery_timer(
-            player, dt
-        )
-        if mini_log:
-            add_log(mini_log)
-        if next_state != "MINIGAME_ARCHERY":
-            set_state(next_state)
-
-    elif menu_state == "MINIGAME_DRILL":
-        player, mini_log, next_state = mini_games.update_drill_timer(
-            player, dt
-        )
-        if mini_log:
-            add_log(mini_log)
-        if next_state != "MINIGAME_DRILL":
-            set_state(next_state)
-
-    elif menu_state == "MINIGAME_DEBATE":
-        player, mini_log, next_state = mini_games.update_debate_timer(
-            player, dt
-        )
-        if mini_log:
-            add_log(mini_log)
-        if next_state != "MINIGAME_DEBATE":
-            set_state(next_state)
+asyncio.run(main())
         
 
             
