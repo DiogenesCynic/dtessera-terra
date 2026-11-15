@@ -1,4 +1,4 @@
-name: Build Mac, Windows, Linux, and Web Beta
+name: Build Mac, Windows, Web, linux, and Android Beta
 
 on:
   workflow_dispatch:
@@ -61,11 +61,26 @@ jobs:
       - name: Build WebAssembly Archive
         run: |
           pygbag --build --archive .
-      - name: Upload Web Beta (For Chromebook & itch.io)
+      - name: Upload Web Beta
         uses: actions/upload-artifact@v4
         with:
           name: Dtessera_Terra_Web_Beta
           path: build/web.zip
+
+  build_android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Android APK with Buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
+        with:
+          command: buildozer android debug
+          buildozer_version: master
+      - name: Upload Android Beta
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dtessera_Terra_Android_Beta
+          path: bin/*.apk
   
   build_linux:
     runs-on: ubuntu-latest
