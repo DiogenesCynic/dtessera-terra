@@ -89,6 +89,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
@@ -96,18 +101,20 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y unzip
           npm install -g cordova
-          yes | sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
           cordova create android_app com.noburu.dtesseraterra "Dtessera Terra"
           cd android_app
           rm -rf www/*
           unzip -q ../build/web.zip -d www/
-          # Configure landscape, fullscreen, and localhost asset serving for WebAssembly
           sed -i 's|</widget>|    <preference name="Orientation" value="landscape" />\n    <preference name="Fullscreen" value="true" />\n    <preference name="Hostname" value="localhost" />\n    <preference name="Scheme" value="https" />\n</widget>|' config.xml
           cordova platform add android@13.0.0
           cordova build android --debug
+          mkdir -p ../bin
+          cp platforms/android/app/build/outputs/apk/debug/app-debug.apk ../bin/Dtessera_Terra_Android_Beta.apk
 
       - name: Upload Android Beta APK
         uses: actions/upload-artifact@v4
         with:
           name: Dtessera_Terra_Android_Beta
-          path: android_app/platforms/android/app/build/outputs/apk/debug/app-debug.apk
+          path: bin/Dtessera_Terra_Android_Beta.apk
