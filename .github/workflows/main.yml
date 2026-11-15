@@ -94,15 +94,15 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Package into Standalone Android APK
         run: |
-          sudo apt-get update && sudo apt-get install -y unzip
+          sudo apt-get update && sudo apt-get install -y unzip gradle
           npm install -g cordova
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
           yes | sdkmanager --licenses || true
-          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
           cordova create android_app com.noburu.dtesseraterra "Dtessera Terra"
           cd android_app
           rm -rf www/*
@@ -118,3 +118,23 @@ jobs:
         with:
           name: Dtessera_Terra_Android_Beta
           path: bin/Dtessera_Terra_Android_Beta.apk
+          
+  build_linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Pygame and PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install pygame pyinstaller
+      - name: Build Linux Binary
+        run: |
+          pyinstaller --noconsole --onefile --clean --name "Dtessera_Terra" "Dtessera Terra.py"
+      - name: Upload Linux Beta
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dtessera_Terra_Linux_Beta
+          path: dist/Dtessera_Terra
