@@ -3655,6 +3655,7 @@ async def main():
     global loc_typewriter_idx, log_typewriter_idx, mouse_pos
 
     while True:
+        await asyncio.sleep(0)
         mouse_pos = to_logical_pos(pygame.mouse.get_pos())
 
         if menu_state == "CASINO_CRAPS" and player.get("cr_kick_to_combat"):
@@ -5682,8 +5683,8 @@ async def main():
 
         await asyncio.sleep(0)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+
+asyncio.run(main())
         
 
             
