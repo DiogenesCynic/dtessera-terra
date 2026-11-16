@@ -336,7 +336,6 @@ def present_screen():
         display_screen.blit(scaled_surf, (fs_offset_x, fs_offset_y))
     pygame.display.flip()
 
-
 pygame.display.set_caption("Dtessera Terra")
 clock = pygame.time.Clock()
 
