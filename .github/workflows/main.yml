@@ -1,129 +1,345 @@
-name: Build Mac, Windows, Web and Android Beta
+name: Build Dtessera Terra (Windows, Mac, Web, Android, Linux)
 
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
+  # =========================================================================
+  # 1. WINDOWS DESKTOP BUILD (.EXE)
+  # =========================================================================
   build_windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - name: Install Pygame and PyInstaller
+          python-version: '3.12'
+
+      - name: Install Pygame-CE and PyInstaller
         run: |
           python -m pip install --upgrade pip
-          pip install pygame pyinstaller
-      - name: Build Windows EXE
+          pip install pygame-ce pyinstaller
+
+      - name: Build Windows Executable
         run: |
           pyinstaller --noconsole --onefile --clean --name "Dtessera_Terra" "Dtessera Terra.py"
+
       - name: Upload Windows Beta
         uses: actions/upload-artifact@v4
         with:
           name: Dtessera_Terra_Windows_Beta
           path: dist/Dtessera_Terra.exe
 
+  # =========================================================================
+  # 2. MACOS DESKTOP BUILD (.APP.ZIP)
+  # =========================================================================
   build_mac:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - name: Install Pygame and PyInstaller
+          python-version: '3.12'
+
+      - name: Install Pygame-CE and PyInstaller
         run: |
           python -m pip install --upgrade pip
-          pip install pygame pyinstaller
-      - name: Build macOS App
+          pip install pygame-ce pyinstaller
+
+      - name: Build macOS App Bundle
         run: |
           pyinstaller --noconsole --onedir --clean --name "Dtessera_Terra" "Dtessera Terra.py"
-          cd dist && zip -r Dtessera_Terra_Mac.app.zip Dtessera_Terra.app
+          cd dist && zip -r -q Dtessera_Terra_Mac.app.zip Dtessera_Terra.app
+
       - name: Upload Mac Beta
         uses: actions/upload-artifact@v4
         with:
           name: Dtessera_Terra_Mac_Beta
           path: dist/Dtessera_Terra_Mac.app.zip
 
-  build_web:
-    runs-on: ubuntu-latest
+  # =========================================================================
+  # 3. WEB & ANDROID APK BUILD (MODERN NATIVE ANDROID SDK 35 + OFFLINE WASM)
+  # =========================================================================
+  build_android_and_web:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - name: Install Pygame and Pygbag
+          python-version: '3.12'
+
+      - name: Set up JDK 21 (Temurin LTS)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Prepare WebAssembly-Safe Game Source & Build Pygbag Bundle
         run: |
           python -m pip install --upgrade pip
           pip install pygame-ce pygbag
-      - name: Build WebAssembly Archive
-        run: |
-          cp "Dtessera Terra.py" main.py
-          rm -f "Dtessera Terra.py" "Item Inventory.py" simulate_1000.py generate_map.py buildozer.spec Dtessera_Terra.spec build_beta.yml
+
+          # Clean non-runtime files so Pygbag only packs actual game modules
+          rm -f "Item Inventory.py" simulate_1000.py generate_map.py buildozer.spec Dtessera_Terra.spec build_beta.yml main.py
+
+          # Create a clean staging script that makes Dtessera Terra.py 100% WebAssembly & Android compatible
+          python3 - << 'EOF'
+          import pathlib, re
+
+          # 1. Replace desktop SysFont calls across all modules with instant built-in Font(None, size)
+          for py_file in pathlib.Path(".").glob("*.py"):
+              text = py_file.read_text(encoding="utf-8")
+              # Convert pygame.font.SysFont("...", size, ...) -> pygame.font.Font(None, int(size * 1.25))
+              def _replace_sysfont(m):
+                  sz = int(m.group(1))
+                  return f"pygame.font.Font(None, {int(sz * 1.22)})"
+              text = re.sub(r'pygame\.font\.SysFont\([^,]+,\s*(\d+)[^)]*\)', _replace_sysfont, text)
+              py_file.write_text(text, encoding="utf-8")
+
+          # 2. Transform "Dtessera Terra.py" into a direct, self-contained async main.py
+          src = pathlib.Path("Dtessera Terra.py").read_text(encoding="utf-8")
+
+          # Ensure asyncio is imported
+          if "import asyncio" not in src:
+              src = "import asyncio\n" + src
+
+          # Remove .convert() on logical surface before display init in WASM
+          src = src.replace("pygame.Surface((WIDTH, HEIGHT)).convert()", "pygame.Surface((WIDTH, HEIGHT))")
+
+          # Ensure every present_screen() yields via await asyncio.sleep(0) or main loop yields at top
+          src = re.sub(r'if\s+__name__\s*==\s*["\']__main__["\']\s*:\s*\n\s*asyncio\.run\(main\(\)\)', 'asyncio.run(main())', src)
+          if "asyncio.run(main())" not in src:
+              src += "\nasyncio.run(main())\n"
+
+          # Guarantee await asyncio.sleep(0) is the VERY FIRST line inside while True:
+          src = re.sub(
+              r'(\s+while\s+True\s*:\s*\n)(\s+)',
+              r'\1\2await asyncio.sleep(0)\n\2',
+              src,
+              count=1
+          )
+
+          pathlib.Path("main.py").write_text(src, encoding="utf-8")
+          pathlib.Path("Dtessera Terra.py").unlink()
+          EOF
+
+          # Build Pygbag bundle
+          pygbag --build .
           pygbag --build --archive .
-      - name: Upload Web Beta
+
+      - name: Upload Web Beta (For itch.io / Browser)
         uses: actions/upload-artifact@v4
         with:
           name: Dtessera_Terra_Web_Beta
           path: build/web.zip
 
-  build_android:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Build Pygbag WebAssembly Bundle
+      - name: Build Native Android SDK 35 APK (100% Offline Pre-Cached Runtime)
         run: |
-          python -m pip install --upgrade pip
-          pip install pygame-ce pygbag
-          cp "Dtessera Terra.py" main.py
-          rm -f "Dtessera Terra.py" "Item Inventory.py" simulate_1000.py generate_map.py buildozer.spec Dtessera_Terra.spec build_beta.yml
-          pygbag --build --archive .
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Package into Standalone Android APK
-        run: |
-          sudo apt-get update && sudo apt-get install -y unzip
-          npm install -g cordova
           export ANDROID_HOME=/usr/local/lib/android/sdk
-          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
           export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-          cordova create android_app com.noburu.dtesseraterra "Dtessera Terra"
-          cd android_app
-          rm -rf www/*
-          unzip -q ../build/web.zip -d www/
-          # Remove media-interaction gate so the game starts automatically without hanging
-          sed -i 's/autorun : 0/autorun : 1/g' www/index.html
-          sed -i 's|</widget>|    <access origin="*" />\n    <allow-navigation href="*" />\n    <preference name="AndroidInsecureFileModeEnabled" value="true" />\n    <preference name="Orientation" value="landscape" />\n    <preference name="Fullscreen" value="true" />\n</widget>|' config.xml
-          cordova platform add android@13.0.0
-          cordova build android --debug
-          mkdir -p ../bin
-          cp platforms/android/app/build/outputs/apk/debug/app-debug.apk ../bin/Dtessera_Terra_Android_Beta.apk
+
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+          # Create a clean, modern 2026 Native Android Gradle 8.11 Project
+          mkdir -p android_native/app/src/main/java/com/noburu/dtesseraterra
+          mkdir -p android_native/app/src/main/assets/public
+          mkdir -p android_native/app/src/main/res/values
+
+          # Copy built game assets into APK assets/public/
+          cp -r build/web/* android_native/app/src/main/assets/public/
+
+          # Download the Pygbag 0.9.3 CDN runtime directly into the APK so it works 100% offline!
+          cd android_native/app/src/main/assets/public/
+          CDN_URL="https://pygame-web.github.io/cdn/0.9.3"
+          mkdir -p pythons/0.9
+          curl -sL "$CDN_URL/pythons.js" -o pythons.js
+          curl -sL "$CDN_URL/browserfs.min.js" -o browserfs.min.js
+          curl -sL "$CDN_URL/vt.js" -o vt.js
+          curl -sL "$CDN_URL/jq.js" -o jq.js
+          curl -sL "$CDN_URL/vtx.js" -o vtx.js
+          curl -sL "$CDN_URL/fs.js" -o fs.js
+          curl -sL "$CDN_URL/snd.js" -o snd.js
+          curl -sL "$CDN_URL/gui.js" -o gui.js
+          curl -sL "$CDN_URL/favicon.png" -o favicon.png
+          # Download CPython 3.12 + Pygame-CE WebAssembly prebuilt engine
+          curl -sL "$CDN_URL/pythonrc.py" -o pythonrc.py
+          for f in main.js main.wasm main.data; do
+            curl -sL "$CDN_URL/cpython312/$f" --create-dirs -o "cpython312/$f"
+          done
+
+          # Rewrite index.html to load from local APK assets instead of remote CDN & auto-start
+          sed -i 's|https://pygame-web.github.io/cdn/0.9.3/|https://appassets.androidplatform.net/assets/public/|g' index.html
+          sed -i 's/autorun : 0/autorun : 1/g' index.html
+          cd ../../../../../..
+
+          # Write settings.gradle
+          cat << 'EOF' > android_native/settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "DtesseraTerra"
+          include ':app'
+          EOF
+
+          # Write root build.gradle
+          cat << 'EOF' > android_native/build.gradle
+          plugins {
+              id 'com.android.application' version '8.7.2' apply false
+          }
+          EOF
+
+          # Write gradle.properties
+          cat << 'EOF' > android_native/gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          # Write app/build.gradle targeting Android 15 (SDK 35) & Java 21
+          cat << 'EOF' > android_native/app/build.gradle
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.noburu.dtesseraterra'
+              compileSdk 35
+              defaultConfig {
+                  applicationId "com.noburu.dtesseraterra"
+                  minSdk 26
+                  targetSdk 35
+                  versionCode 1
+                  versionName "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_21
+                  targetCompatibility JavaVersion.VERSION_21
+              }
+          }
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.7.0'
+              implementation 'androidx.webkit:webkit:1.12.1'
+          }
+          EOF
+
+          # Write AndroidManifest.xml (Landscape, Fullscreen, Hardware Accelerated)
+          cat << 'EOF' > android_native/app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:label="Dtessera Terra"
+                  android:hardwareAccelerated="true"
+                  android:theme="@style/Theme.AppCompat.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:screenOrientation="sensorLandscape"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          # Write MainActivity.java using official AndroidX WebViewAssetLoader
+          cat << 'EOF' > android_native/app/src/main/java/com/noburu/dtesseraterra/MainActivity.java
+          package com.noburu.dtesseraterra;
+
+          import android.annotation.SuppressLint;
+          import android.os.Bundle;
+          import android.view.View;
+          import android.view.WindowManager;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebResourceResponse;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import androidx.appcompat.app.AppCompatActivity;
+          import androidx.webkit.WebViewAssetLoader;
+
+          public class MainActivity extends AppCompatActivity {
+              private WebView webView;
+
+              @SuppressLint("SetJavaScriptEnabled")
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  getWindow().setFlags(
+                      WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                      WindowManager.LayoutParams.FLAG_FULLSCREEN
+                  );
+                  getWindow().getDecorView().setSystemUiVisibility(
+                      View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                      | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                      | View.SYSTEM_UI_FLAG_FULLSCREEN
+                  );
+
+                  webView = new WebView(this);
+                  setContentView(webView);
+
+                  final WebViewAssetLoader assetLoader = new WebViewAssetLoader.Builder()
+                      .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
+                      .build();
+
+                  WebSettings settings = webView.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setDatabaseEnabled(true);
+                  settings.setMediaPlaybackRequiresUserGesture(false);
+                  settings.setAllowFileAccess(true);
+                  settings.setAllowContentAccess(true);
+
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                          return assetLoader.shouldInterceptRequest(request.getUrl());
+                      }
+                  });
+
+                  webView.loadUrl("https://appassets.androidplatform.net/assets/public/index.html");
+              }
+
+              @Override
+              public void onBackPressed() {
+                  // Prevent accidental back-gesture exits during gameplay
+              }
+          }
+          EOF
+
+          # Compile the APK with Gradle 8
+          cd android_native
+          gradle assembleDebug --no-daemon
 
       - name: Upload Android Beta APK
         uses: actions/upload-artifact@v4
         with:
           name: Dtessera_Terra_Android_Beta
-          path: bin/Dtessera_Terra_Android_Beta.apk
+          path: android_native/app/build/outputs/apk/debug/app-debug.apk
           
   build_linux:
     runs-on: ubuntu-latest
