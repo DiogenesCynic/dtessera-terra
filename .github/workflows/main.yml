@@ -68,30 +68,79 @@ jobs:
           rm -f "Item Inventory.py" simulate_1000.py generate_map.py main.py
 
           python3 - << 'EOF'
-          import pathlib, re
+          import ast, pathlib, re, sys
 
           src = pathlib.Path("Dtessera Terra.py").read_text(encoding="utf-8")
 
           if "import asyncio" not in src:
               src = "import asyncio\n" + src
 
-          # Replace slow desktop SysFont scans with instant built-in Pygame font
+          # Replace top-level desktop SysFont scans with instant built-in Pygame font
           sysfont_patch = (
               "import pygame\n"
               "pygame.font.init()\n"
               "_orig_font = pygame.font.Font\n"
-              "pygame.font.SysFont = lambda name, size, bold=False, italic=False: _orig_font(None, int(size * 1.22))\n"
+              "pygame.font.SysFont = lambda name, size, bold=False, italic=False: _orig_font(None, int(size * 1.22))"
           )
-          src = src.replace("import pygame", sysfont_patch, 1)
+          src = re.sub(r'^import pygame\s*$', sysfont_patch, src, count=1, flags=re.MULTILINE)
           src = src.replace("pygame.Surface((WIDTH, HEIGHT)).convert()", "pygame.Surface((WIDTH, HEIGHT))")
 
-          # Guarantee every frame yields to the mobile browser event loop
-          src = re.sub(
-              r'(\s+while\s+True\s*:\s*\n)(\s+)',
-              r'\1\2await asyncio.sleep(0)\n\2',
-              src,
+          # Auto-declare every top-level variable assigned inside async def main() as global
+          tree = ast.parse(src)
+
+          def scan_stores(node, target_set):
+              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                  return
+              if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                  target_set.add(node.id)
+              for child in ast.iter_child_nodes(node):
+                  scan_stores(child, target_set)
+
+          top_vars = set()
+          for stmt in tree.body:
+              scan_stores(stmt, top_vars)
+
+          main_node = next(
+              (n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "main"),
+              None
+          )
+          if not main_node:
+              print("ERROR: 'async def main():' was not found in Dtessera Terra.py!", file=sys.stderr)
+              sys.exit(1)
+
+          assigned_in_main = set()
+          for stmt in main_node.body:
+              scan_stores(stmt, assigned_in_main)
+
+          arg_names = {a.arg for a in main_node.args.args}
+          needed_globals = sorted((top_vars & assigned_in_main) - arg_names)
+          if needed_globals:
+              lines = src.splitlines(keepends=True)
+              first_body_line = main_node.body[0].lineno - 1
+              indent = re.match(r'^([ \t]*)', lines[first_body_line]).group(1)
+              lines.insert(first_body_line, f"{indent}global {', '.join(needed_globals)}\n")
+              src = "".join(lines)
+              print("Auto-declared globals in main():", needed_globals)
+
+          # ONLY inject await asyncio.sleep(0) into the while True inside async def main()
+          m_main = re.search(r'^async\s+def\s+main\s*\([^)]*\)\s*:', src, flags=re.MULTILINE)
+          head = src[:m_main.start()]
+          tail = src[m_main.start():]
+
+          def add_sleep(match):
+              while_line, indent, next_line = match.group(1), match.group(2), match.group(3)
+              if "await asyncio.sleep" in next_line:
+                  return match.group(0)
+              return f"{while_line}{indent}await asyncio.sleep(0)\n{indent}{next_line}"
+
+          tail = re.sub(
+              r'(\n[ \t]+while\s+True\s*:\s*\n)([ \t]+)([^\n]+)',
+              add_sleep,
+              tail,
               count=1
           )
+          src = head + tail
+
           src = re.sub(
               r'if\s+__name__\s*==\s*["\']__main__["\']\s*:\s*\n\s*asyncio\.run\(main\(\)\)',
               'asyncio.run(main())',
@@ -104,9 +153,15 @@ jobs:
           pathlib.Path("Dtessera Terra.py").unlink()
           EOF
 
+          # Fail immediately here if any Python file has a syntax error
+          python3 -m py_compile *.py
+
           pygbag --ume_block 0 --build .
           sed -i 's/autorun : 0/autorun : 1/g' build/web/index.html
-          (cd build/web && zip -r -q ../web.zip .)
+          sed -i 's/ume_block : 1/ume_block : 0/g' build/web/index.html
+
+          # Confirm index.html is right at the top of build/web
+          test -f build/web/index.html
 
       - name: Upload Web & iOS Bundle
         uses: actions/upload-artifact@v4
