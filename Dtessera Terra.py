@@ -3901,7 +3901,7 @@ async def main():
                         player["current_month_idx"] = (
                             player.get("current_month_idx", 1) + 1
                         ) % 12
-                        weather_engine.update_weather_from_clock(player)
+                        weather_engine.update_weather_on_time_advance(player, minutes_elapsed, world_map=None)
                     elif (
                         s_rects.get("toggle_tooltips")
                         and s_rects["toggle_tooltips"].collidepoint(event.pos)
