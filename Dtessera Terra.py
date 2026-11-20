@@ -3650,8 +3650,7 @@ if DEV_MODE:
 # 8. MAIN RENDER LOOP
 # =========================================================================
 async def main():
-    global menu_state, selected_target, selected_verb, ch3_selected_army_pos
-    global loc_typewriter_idx, log_typewriter_idx, mouse_pos
+    global player, loc_typewriter_idx, log_typewriter_idx, selected_target, menu_state, selected_verb, ch3_selected_army_pos, mouse_pos
 
     while True:
         await asyncio.sleep(0)
