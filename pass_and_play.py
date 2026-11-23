@@ -1073,7 +1073,7 @@ def handle_pnp_lobby_event(event, player, world_map, ui_renderer_mod):
         player["current_month_idx"] = m_idx
         player["current_month"] = ch3_war_engine.REPUBLICAN_MONTHS[m_idx]
         player["ch3_victory_mode"] = cfg.get("victory_mode", "100_PTS")
-        weather_engine.update_weather_on_time_advance(player, minutes_elapsed, world_map=None)
+        weather_engine.update_weather_on_time_advance(player, 0, world_map=None)
 
         init_pnp_campaign(
             player,
@@ -1095,7 +1095,7 @@ def handle_pnp_lobby_event(event, player, world_map, ui_renderer_mod):
         player["current_month"] = ch3_war_engine.REPUBLICAN_MONTHS[m_idx]
         player["ch3_victory_mode"] = cfg.get("victory_mode", "100_PTS")
         player["ch3_rank"] = player.get("ch3_rank") or "General"
-        weather_engine.update_weather_on_time_advance(player, minutes_elapsed, world_map=None)
+        weather_engine.update_weather_on_time_advance(player, 0, world_map=None)
 
         init_pnp_campaign(
             player,
