@@ -179,6 +179,27 @@ jobs:
 
           cp -r build/web/* android_native/app/src/main/assets/public/
 
+          # Patch Android-only index.html for edge-to-edge notch fill & dark background
+          python3 - << 'EOF'
+          import pathlib
+          p = pathlib.Path("android_native/app/src/main/assets/public/index.html")
+          html = p.read_text(encoding="utf-8")
+          if "viewport-fit=cover" not in html:
+              html = html.replace(
+                  'name="viewport" content="',
+                  'name="viewport" content="viewport-fit=cover, '
+              )
+          wide_css = (
+              "<style>"
+              "html, body { margin:0 !important; padding:0 !important; width:100% !important; "
+              "height:100% !important; overflow:hidden !important; background:#100f0e !important; }"
+              "canvas.emscripten { display:block; margin:auto; max-width:100vw; max-height:100vh; }"
+              "</style></head>"
+          )
+          html = html.replace("</head>", wide_css, 1)
+          p.write_text(html, encoding="utf-8")
+          EOF
+
           # Rename .gz files so Android AAPT does not strip or decompress them
           find android_native/app/src/main/assets/public -type f -name "*.gz" -exec sh -c 'mv "$1" "$1.asset"' _ {} \;
 
@@ -211,8 +232,8 @@ jobs:
                   applicationId "com.noburu.dtesseraterra"
                   minSdk 26
                   targetSdk 35
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 2
+                  versionName "1.1"
               }
               androidResources {
                   noCompress += ['apk', 'asset', 'gz', 'tar', 'wasm', 'data', 'whl', 'zip']
@@ -256,6 +277,7 @@ jobs:
           import android.content.Context;
           import android.graphics.Color;
           import android.net.Uri;
+          import android.os.Build;
           import android.os.Bundle;
           import android.view.Gravity;
           import android.view.View;
@@ -285,8 +307,11 @@ jobs:
           public class MainActivity extends Activity {
               private WebView webView;
               private ScrollView logScroll;
+              private LinearLayout btnBar;
               private TextView debugOverlay;
               private final Deque<String> logs = new ArrayDeque<>();
+              private int secretTapCount = 0;
+              private long lastSecretTapMs = 0;
 
               private void appendLog(String line, boolean showNow) {
                   runOnUiThread(() -> {
@@ -295,7 +320,10 @@ jobs:
                       StringBuilder sb = new StringBuilder("Tap box to hide (or tap COPY top-right):\n");
                       for (String s : logs) sb.append(s).append("\n");
                       debugOverlay.setText(sb.toString());
-                      if (showNow) logScroll.setVisibility(View.VISIBLE);
+                      if (showNow) {
+                          btnBar.setVisibility(View.VISIBLE);
+                          logScroll.setVisibility(View.VISIBLE);
+                      }
                   });
               }
 
@@ -329,16 +357,26 @@ jobs:
                       WindowManager.LayoutParams.FLAG_FULLSCREEN,
                       WindowManager.LayoutParams.FLAG_FULLSCREEN
                   );
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                      WindowManager.LayoutParams lp = getWindow().getAttributes();
+                      lp.layoutInDisplayCutoutMode =
+                          WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                      getWindow().setAttributes(lp);
+                  }
                   getWindow().getDecorView().setSystemUiVisibility(
                       View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                       | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                       | View.SYSTEM_UI_FLAG_FULLSCREEN
+                      | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                      | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                      | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                   );
 
-                  WebView.setWebContentsDebuggingEnabled(true);
-
                   FrameLayout root = new FrameLayout(this);
+                  root.setBackgroundColor(Color.parseColor("#100F0E"));
+
                   webView = new WebView(this);
+                  webView.setBackgroundColor(Color.parseColor("#100F0E"));
                   root.addView(webView, new FrameLayout.LayoutParams(
                       FrameLayout.LayoutParams.MATCH_PARENT,
                       FrameLayout.LayoutParams.MATCH_PARENT
@@ -352,7 +390,10 @@ jobs:
                   debugOverlay.setTextColor(Color.GREEN);
                   debugOverlay.setTextSize(11);
                   debugOverlay.setPadding(24, 24, 24, 24);
-                  debugOverlay.setOnClickListener(v -> logScroll.setVisibility(View.GONE));
+                  debugOverlay.setOnClickListener(v -> {
+                      logScroll.setVisibility(View.GONE);
+                      btnBar.setVisibility(View.GONE);
+                  });
                   logScroll.addView(debugOverlay);
 
                   root.addView(logScroll, new FrameLayout.LayoutParams(
@@ -360,13 +401,15 @@ jobs:
                       FrameLayout.LayoutParams.MATCH_PARENT
                   ));
 
-                  LinearLayout btnBar = new LinearLayout(this);
+                  // Clean beta UI: hidden by default; tap top-right corner 5x quickly to reveal
+                  btnBar = new LinearLayout(this);
                   btnBar.setOrientation(LinearLayout.HORIZONTAL);
+                  btnBar.setVisibility(View.GONE);
 
                   TextView copyBtn = new TextView(this);
                   copyBtn.setText("COPY");
                   copyBtn.setTextColor(Color.WHITE);
-                  copyBtn.setBackgroundColor(Color.argb(140, 0, 80, 0));
+                  copyBtn.setBackgroundColor(Color.argb(180, 0, 80, 0));
                   copyBtn.setTextSize(10);
                   copyBtn.setPadding(16, 10, 16, 10);
                   copyBtn.setOnClickListener(v -> {
@@ -379,20 +422,37 @@ jobs:
                   btnBar.addView(copyBtn);
 
                   TextView logBtn = new TextView(this);
-                  logBtn.setText("LOG");
+                  logBtn.setText("HIDE");
                   logBtn.setTextColor(Color.WHITE);
-                  logBtn.setBackgroundColor(Color.argb(140, 0, 0, 0));
+                  logBtn.setBackgroundColor(Color.argb(180, 90, 0, 0));
                   logBtn.setTextSize(10);
                   logBtn.setPadding(16, 10, 16, 10);
-                  logBtn.setOnClickListener(v -> logScroll.setVisibility(
-                      logScroll.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE
-                  ));
+                  logBtn.setOnClickListener(v -> {
+                      logScroll.setVisibility(View.GONE);
+                      btnBar.setVisibility(View.GONE);
+                  });
                   btnBar.addView(logBtn);
 
                   root.addView(btnBar, new FrameLayout.LayoutParams(
                       FrameLayout.LayoutParams.WRAP_CONTENT,
                       FrameLayout.LayoutParams.WRAP_CONTENT,
                       Gravity.TOP | Gravity.END
+                  ));
+
+                  View secretCorner = new View(this);
+                  secretCorner.setBackgroundColor(Color.TRANSPARENT);
+                  secretCorner.setOnClickListener(v -> {
+                      long now = System.currentTimeMillis();
+                      secretTapCount = (now - lastSecretTapMs < 1200) ? (secretTapCount + 1) : 1;
+                      lastSecretTapMs = now;
+                      if (secretTapCount >= 5) {
+                          secretTapCount = 0;
+                          btnBar.setVisibility(View.VISIBLE);
+                          logScroll.setVisibility(View.VISIBLE);
+                      }
+                  });
+                  root.addView(secretCorner, new FrameLayout.LayoutParams(
+                      72, 72, Gravity.TOP | Gravity.END
                   ));
 
                   setContentView(root);
@@ -490,7 +550,7 @@ jobs:
                       }
                   });
 
-                  webView.loadUrl("https://appassets.androidplatform.net/index.html");
+                  webView.loadUrl("https://appassets.androidplatform.net/index.html?wide=1");
               }
 
               @Override
