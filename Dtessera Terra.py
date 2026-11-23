@@ -117,6 +117,7 @@ import ch2_parvus
 import ch2_election
 import ch2_roguery
 import pass_and_play
+from wide_layout import WideLayoutManager
 
 # =========================================================================
 # 1. CORE GAME DATA & STATE
@@ -281,12 +282,14 @@ os.environ["SDL_RENDER_SCALE_QUALITY"] = "2"  # Crisp anisotropic/bilinear scali
 pygame.init()
 
 WIDTH, HEIGHT = 800, 600
-display_screen = pygame.display.set_mode((WIDTH, HEIGHT))
-screen = pygame.Surface((WIDTH, HEIGHT)).convert()  # Logical 800x600 canvas
 is_fullscreen = False
 fs_scale = 1.0
 fs_offset_x = 0
 fs_offset_y = 0
+
+wide_ui = WideLayoutManager()
+display_screen = pygame.display.set_mode(wide_ui.display_size)
+screen = wide_ui.stage_800
 
 
 def toggle_fullscreen():
@@ -316,25 +319,12 @@ def get_logical_mouse_pos():
     return mx, my
 
 def to_logical_pos(pos):
-    """Maps physical monitor mouse coordinates back to the 800x600 logical canvas."""
-    if not is_fullscreen:
-        return pos
-    lx = int((pos[0] - fs_offset_x) / fs_scale)
-    ly = int((pos[1] - fs_offset_y) / fs_scale)
-    return (max(0, min(WIDTH - 1, lx)), max(0, min(HEIGHT - 1, ly)))
+    return wide_ui.to_logical_pos(pos, menu_state, is_fullscreen, fs_scale, fs_offset_x, fs_offset_y)
 
 
 def present_screen():
-    """Blits the 800x600 logical canvas to the window or smooth-scaled fullscreen display."""
-    if not is_fullscreen:
-        display_screen.blit(screen, (0, 0))
-    else:
-        display_screen.fill((12, 14, 18))
-        scaled_w = int(WIDTH * fs_scale)
-        scaled_h = int(HEIGHT * fs_scale)
-        scaled_surf = pygame.transform.smoothscale(screen, (scaled_w, scaled_h))
-        display_screen.blit(scaled_surf, (fs_offset_x, fs_offset_y))
-    pygame.display.flip()
+    """Blits the active logical canvas (800x600 or 1200x600) to the display."""
+    wide_ui.present(display_screen, screen, menu_state, is_fullscreen, fs_scale, fs_offset_x, fs_offset_y)
 
 pygame.display.set_caption("Dtessera Terra")
 clock = pygame.time.Clock()
@@ -3651,10 +3641,11 @@ if DEV_MODE:
 # =========================================================================
 async def main():
     global player, loc_typewriter_idx, log_typewriter_idx, selected_target, menu_state
-    global selected_verb, ch3_selected_army_pos, mouse_pos
+    global selected_verb, ch3_selected_army_pos, mouse_pos, screen
 
     while True:
         await asyncio.sleep(0)
+        screen = wide_ui.get_active_surface(menu_state)
         mouse_pos = to_logical_pos(pygame.mouse.get_pos())
 
         if menu_state == "CASINO_CRAPS" and player.get("cr_kick_to_combat"):
@@ -3687,6 +3678,17 @@ async def main():
     
         active_dpad = dpad_buttons if menu_state == "MAIN" else []
         right_buttons = get_current_right_buttons()
+        wide_ui.apply_hud_layout(
+            menu_state=menu_state,
+            location_panel=location_panel_ui,
+            log_panel=log_panel_ui,
+            dpad=retro_dpad,
+            clock_ui=game_clock_ui,
+            circle_buttons=[b for b in right_buttons if isinstance(b, CircleButton)],
+            weather_pill_rect=getattr(weather_engine, "WEATHER_PILL_RECT", None),
+            current_buttons=[b for b in right_buttons if not isinstance(b, CircleButton)],
+        )
+        
         if menu_state in (
             "CASINO_BLACKJACK",
             "CASINO_POKER",
@@ -3705,6 +3707,9 @@ async def main():
         for event in pygame.event.get():
             if hasattr(event, "pos"):
                 event.pos = to_logical_pos(event.pos)
+            
+            if wide_ui.handle_touch_scroll(event, menu_state, location_panel_ui, log_panel_ui):
+                continue
     
             if event.type == pygame.QUIT:
                 pygame.quit()
@@ -5253,7 +5258,12 @@ async def main():
             continue
     
         # --- STANDARD CHAPTER 1 & 2 RPG RENDER ---
-        visual_backdrop.draw_world_backdrop(screen, player, world_map)
+        if wide_ui.is_wide_state(menu_state):
+            wide_ui.draw_wide_backdrop(
+                screen, visual_backdrop.draw_world_backdrop, player, world_map
+            )
+        else:
+            visual_backdrop.draw_world_backdrop(screen, player, world_map)
         weather_engine.draw_weather_and_darkness_overlay(
             screen, player, FONT, FONT_BOLD, mouse_pos
         )
@@ -5333,11 +5343,12 @@ async def main():
                     "*** THE BARN IS ON FIRE! Thick, choking black smoke billows "
                     "from the stalls! ***\n\n" + loc_desc
                 )
-    
-        if menu_state.startswith("MINIGAME_") or menu_state.startswith("CASINO_"):
-            log_panel_ui.rect = pygame.Rect(40, 164, 408, 218)
-        else:
-            log_panel_ui.rect = pygame.Rect(40, 164, 720, 204)
+
+        if not wide_ui.is_wide_state(menu_state):
+            if menu_state.startswith("MINIGAME_") or menu_state.startswith("CASINO_"):
+                log_panel_ui.rect = pygame.Rect(40, 164, 408, 218)
+            else:
+                log_panel_ui.rect = pygame.Rect(40, 164, 720, 204)
     
         location_panel_ui.draw_location_panel(
             screen, loc_name, loc_desc, loc_typewriter_idx, territory_owner=owner
@@ -5363,28 +5374,36 @@ async def main():
         hud_font = pygame.font.Font(None, 18)
         curr_w = get_inventory_weight(player)
         max_w = get_max_carry_weight(player)
-        hud_line1 = (
-            f"HP: {player['health']}/{player['max_health']}  |  "
-            f"Silver: {player['silver']}s  |  Wt: {curr_w}/{max_w}"
-        )
-        hud_line2 = (
-            f"Food: {player['hunger']:.0f}%  |  "
-            f"Water: {player['thirst']:.0f}%  |  Rep: {player['reputation']}"
-        )
-        screen.blit(hud_font.render(hud_line1, True, TEXT_COLOR), (32, 392))
-        screen.blit(hud_font.render(hud_line2, True, TEXT_MUTED), (32, 410))
-    
         badges = []
         if player.get("afflictions"):
             badges.append("[ILL/POISONED]")
         if curr_w > max_w:
             badges.append("[HEAVY]")
         if player.get("horse_stabled"):
-            badges.append(f"[STABLE TAB: {get_stabling_debt(player)}s]")
-        if badges:
-            screen.blit(
-                hud_font.render(" ".join(badges), True, (235, 95, 95)), (32, 428)
+            badges.append(f"[TAB: {get_stabling_debt(player)}s]")
+
+        if wide_ui.is_wide_state(menu_state):
+            hud_line1 = f"HP:{player['health']}/{player['max_health']} | {player['silver']}s | {curr_w:.0f}/{max_w:.0f}lb"
+            hud_line2 = f"Food:{player['hunger']:.0f}% | H2O:{player['thirst']:.0f}% | Rep:{player['reputation']}"
+            screen.blit(hud_font.render(hud_line1, True, TEXT_COLOR), (18, 318))
+            screen.blit(hud_font.render(hud_line2, True, TEXT_MUTED), (18, 338))
+            if badges:
+                screen.blit(hud_font.render(" ".join(badges), True, (235, 95, 95)), (18, 358))
+        else:
+            hud_line1 = (
+                f"HP: {player['health']}/{player['max_health']}  |  "
+                f"Silver: {player['silver']}s  |  Wt: {curr_w}/{max_w}"
             )
+            hud_line2 = (
+                f"Food: {player['hunger']:.0f}%  |  "
+                f"Water: {player['thirst']:.0f}%  |  Rep: {player['reputation']}"
+            )
+            screen.blit(hud_font.render(hud_line1, True, TEXT_COLOR), (32, 392))
+            screen.blit(hud_font.render(hud_line2, True, TEXT_MUTED), (32, 410))
+            if badges:
+                screen.blit(
+                    hud_font.render(" ".join(badges), True, (235, 95, 95)), (32, 428)
+                )
     
         game_clock_ui.draw(screen, player["total_game_minutes"], LOCATION_ACCENT)
         pass_and_play.draw_pnp_turn_hud_pill(screen, player, FONT_BOLD)
