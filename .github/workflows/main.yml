@@ -179,6 +179,9 @@ jobs:
 
           cp -r build/web/* android_native/app/src/main/assets/public/
 
+          # Rename .gz files so Android AAPT does not strip or decompress them
+          find android_native/app/src/main/assets/public -type f -name "*.gz" -exec sh -c 'mv "$1" "$1.asset"' _ {} \;
+
           cat << 'EOF' > android_native/settings.gradle
           pluginManagement {
               repositories { google(); mavenCentral(); gradlePluginPortal() }
@@ -210,6 +213,9 @@ jobs:
                   targetSdk 35
                   versionCode 1
                   versionName "1.0"
+              }
+              androidResources {
+                  noCompress += ['apk', 'asset', 'gz', 'tar', 'wasm', 'data', 'whl', 'zip']
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_21
@@ -245,6 +251,9 @@ jobs:
 
           import android.annotation.SuppressLint;
           import android.app.Activity;
+          import android.content.ClipData;
+          import android.content.ClipboardManager;
+          import android.content.Context;
           import android.graphics.Color;
           import android.net.Uri;
           import android.os.Bundle;
@@ -260,8 +269,14 @@ jobs:
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
           import android.widget.FrameLayout;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
           import android.widget.TextView;
+          import android.widget.Toast;
+          import java.io.ByteArrayInputStream;
+          import java.io.ByteArrayOutputStream;
           import java.io.InputStream;
+          import java.nio.charset.StandardCharsets;
           import java.util.ArrayDeque;
           import java.util.Deque;
           import java.util.HashMap;
@@ -269,18 +284,41 @@ jobs:
 
           public class MainActivity extends Activity {
               private WebView webView;
+              private ScrollView logScroll;
               private TextView debugOverlay;
               private final Deque<String> logs = new ArrayDeque<>();
 
               private void appendLog(String line, boolean showNow) {
                   runOnUiThread(() -> {
-                      if (logs.size() >= 20) logs.removeFirst();
+                      if (logs.size() >= 60) logs.removeFirst();
                       logs.addLast(line);
-                      StringBuilder sb = new StringBuilder("Tap log box to hide:\n");
+                      StringBuilder sb = new StringBuilder("Tap box to hide (or tap COPY top-right):\n");
                       for (String s : logs) sb.append(s).append("\n");
                       debugOverlay.setText(sb.toString());
-                      if (showNow) debugOverlay.setVisibility(View.VISIBLE);
+                      if (showNow) logScroll.setVisibility(View.VISIBLE);
                   });
+              }
+
+              private byte[] readAllBytes(InputStream is) throws Exception {
+                  ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                  byte[] chunk = new byte[16384];
+                  int nRead;
+                  while ((nRead = is.read(chunk, 0, chunk.length)) != -1) {
+                      buffer.write(chunk, 0, nRead);
+                  }
+                  is.close();
+                  return buffer.toByteArray();
+              }
+
+              private InputStream openPublicAsset(String path) throws Exception {
+                  String clean = path.startsWith("/") ? path.substring(1) : path;
+                  if (clean.isEmpty()) clean = "index.html";
+                  if (clean.endsWith(".gz")) {
+                      try {
+                          return getAssets().open("public/" + clean + ".asset");
+                      } catch (Exception ignored) {}
+                  }
+                  return getAssets().open("public/" + clean);
               }
 
               @SuppressLint("SetJavaScriptEnabled")
@@ -306,29 +344,52 @@ jobs:
                       FrameLayout.LayoutParams.MATCH_PARENT
                   ));
 
+                  logScroll = new ScrollView(this);
+                  logScroll.setBackgroundColor(Color.argb(225, 0, 0, 0));
+                  logScroll.setVisibility(View.GONE);
+
                   debugOverlay = new TextView(this);
-                  debugOverlay.setBackgroundColor(Color.argb(220, 0, 0, 0));
                   debugOverlay.setTextColor(Color.GREEN);
                   debugOverlay.setTextSize(11);
                   debugOverlay.setPadding(24, 24, 24, 24);
-                  debugOverlay.setVisibility(View.GONE);
-                  debugOverlay.setOnClickListener(v -> debugOverlay.setVisibility(View.GONE));
-                  root.addView(debugOverlay, new FrameLayout.LayoutParams(
+                  debugOverlay.setOnClickListener(v -> logScroll.setVisibility(View.GONE));
+                  logScroll.addView(debugOverlay);
+
+                  root.addView(logScroll, new FrameLayout.LayoutParams(
                       FrameLayout.LayoutParams.MATCH_PARENT,
-                      FrameLayout.LayoutParams.WRAP_CONTENT,
-                      Gravity.BOTTOM
+                      FrameLayout.LayoutParams.MATCH_PARENT
                   ));
+
+                  LinearLayout btnBar = new LinearLayout(this);
+                  btnBar.setOrientation(LinearLayout.HORIZONTAL);
+
+                  TextView copyBtn = new TextView(this);
+                  copyBtn.setText("COPY");
+                  copyBtn.setTextColor(Color.WHITE);
+                  copyBtn.setBackgroundColor(Color.argb(140, 0, 80, 0));
+                  copyBtn.setTextSize(10);
+                  copyBtn.setPadding(16, 10, 16, 10);
+                  copyBtn.setOnClickListener(v -> {
+                      ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                      if (cm != null) {
+                          cm.setPrimaryClip(ClipData.newPlainText("DtesseraLog", debugOverlay.getText()));
+                          Toast.makeText(this, "Logs copied to clipboard", Toast.LENGTH_SHORT).show();
+                      }
+                  });
+                  btnBar.addView(copyBtn);
 
                   TextView logBtn = new TextView(this);
                   logBtn.setText("LOG");
                   logBtn.setTextColor(Color.WHITE);
-                  logBtn.setBackgroundColor(Color.argb(120, 0, 0, 0));
+                  logBtn.setBackgroundColor(Color.argb(140, 0, 0, 0));
                   logBtn.setTextSize(10);
                   logBtn.setPadding(16, 10, 16, 10);
-                  logBtn.setOnClickListener(v -> debugOverlay.setVisibility(
-                      debugOverlay.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE
+                  logBtn.setOnClickListener(v -> logScroll.setVisibility(
+                      logScroll.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE
                   ));
-                  root.addView(logBtn, new FrameLayout.LayoutParams(
+                  btnBar.addView(logBtn);
+
+                  root.addView(btnBar, new FrameLayout.LayoutParams(
                       FrameLayout.LayoutParams.WRAP_CONTENT,
                       FrameLayout.LayoutParams.WRAP_CONTENT,
                       Gravity.TOP | Gravity.END
@@ -350,10 +411,15 @@ jobs:
                       @Override
                       public boolean onConsoleMessage(ConsoleMessage cm) {
                           String msg = cm.message();
-                          boolean isErr = cm.messageLevel() == ConsoleMessage.MessageLevel.ERROR
-                                  || msg.contains("Traceback")
+                          boolean ignore = msg.contains("BrowserFS not found");
+                          boolean isErr = !ignore && (
+                                  msg.contains("Traceback")
+                                  || msg.contains("ReadError")
                                   || msg.contains("SyntaxError")
-                                  || msg.contains("Exception");
+                                  || msg.contains("UnboundLocalError")
+                                  || msg.contains("ModuleNotFoundError")
+                                  || msg.contains("Exception")
+                          );
                           appendLog("[" + cm.messageLevel() + "] " + msg, isErr);
                           return true;
                       }
@@ -362,7 +428,10 @@ jobs:
                   webView.setWebViewClient(new WebViewClient() {
                       @Override
                       public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                          appendLog("NET ERR: " + request.getUrl() + " -> " + error.getDescription(), true);
+                          String url = request.getUrl().toString();
+                          if (!url.endsWith("favicon.ico")) {
+                              appendLog("NET ERR: " + url + " -> " + error.getDescription(), true);
+                          }
                       }
 
                       @Override
@@ -371,22 +440,50 @@ jobs:
                           if ("appassets.androidplatform.net".equals(uri.getHost())) {
                               String path = uri.getPath();
                               if (path == null || path.isEmpty() || "/".equals(path)) path = "/index.html";
-                              try {
-                                  InputStream is = getAssets().open("public" + path);
-                                  String mime = "application/octet-stream";
-                                  if (path.endsWith(".html")) mime = "text/html";
-                                  else if (path.endsWith(".js")) mime = "application/javascript";
-                                  else if (path.endsWith(".wasm")) mime = "application/wasm";
-                                  else if (path.endsWith(".png")) mime = "image/png";
-                                  else if (path.endsWith(".css")) mime = "text/css";
-                                  else if (path.endsWith(".json")) mime = "application/json";
 
-                                  Map<String, String> headers = new HashMap<>();
-                                  headers.put("Access-Control-Allow-Origin", "*");
-                                  return new WebResourceResponse(mime, "UTF-8", 200, "OK", headers, is);
+                              Map<String, String> headers = new HashMap<>();
+                              headers.put("Access-Control-Allow-Origin", "*");
+                              headers.put("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+                              headers.put("Access-Control-Allow-Headers", "*");
+
+                              if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+                                  return new WebResourceResponse(
+                                      "text/plain", "UTF-8", 200, "OK", headers,
+                                      new ByteArrayInputStream(new byte[0])
+                                  );
+                              }
+
+                              try {
+                                  byte[] bytes = readAllBytes(openPublicAsset(path));
+                                  String mime = "application/octet-stream";
+                                  String encoding = null;
+
+                                  if (path.endsWith(".html")) { mime = "text/html"; encoding = "UTF-8"; }
+                                  else if (path.endsWith(".js")) { mime = "application/javascript"; encoding = "UTF-8"; }
+                                  else if (path.endsWith(".css")) { mime = "text/css"; encoding = "UTF-8"; }
+                                  else if (path.endsWith(".json")) { mime = "application/json"; encoding = "UTF-8"; }
+                                  else if (path.endsWith(".svg")) { mime = "image/svg+xml"; encoding = "UTF-8"; }
+                                  else if (path.endsWith(".wasm")) { mime = "application/wasm"; }
+                                  else if (path.endsWith(".png")) { mime = "image/png"; }
+                                  else if (path.endsWith(".apk")) { mime = "application/zip"; }
+                                  else if (path.endsWith(".gz")) { mime = "application/gzip"; }
+                                  else if (path.endsWith(".tar")) { mime = "application/x-tar"; }
+
+                                  headers.put("Content-Length", String.valueOf(bytes.length));
+                                  appendLog("LOCAL 200 " + path + " (" + bytes.length + " B)", false);
+
+                                  InputStream body = "HEAD".equalsIgnoreCase(request.getMethod())
+                                      ? new ByteArrayInputStream(new byte[0])
+                                      : new ByteArrayInputStream(bytes);
+                                  return new WebResourceResponse(mime, encoding, 200, "OK", headers, body);
                               } catch (Exception e) {
-                                  appendLog("404 LOCAL: " + path, true);
-                                  return new WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", null, null);
+                                  if (!path.endsWith("favicon.ico")) {
+                                      appendLog("404 LOCAL: " + path, true);
+                                  }
+                                  return new WebResourceResponse(
+                                      "text/plain", "UTF-8", 404, "Not Found", headers,
+                                      new ByteArrayInputStream("Not Found".getBytes(StandardCharsets.UTF_8))
+                                  );
                               }
                           }
                           return null;
