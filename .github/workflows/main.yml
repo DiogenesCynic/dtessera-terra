@@ -1,4 +1,4 @@
-name: Build Dtessera Terra (Windows, Mac, Web, Android, linux)
+name: Build Dtessera Terra (Windows, Mac, Web, Android, Linux)
 
 on:
   workflow_dispatch:
