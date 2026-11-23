@@ -5,22 +5,19 @@ on:
   push:
     branches: [ main ]
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build_windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - run: |
           python -m pip install --upgrade pip
           pip install pygame-ce pyinstaller
           pyinstaller --noconsole --onefile --clean --name "Dtessera_Terra" "Dtessera Terra.py"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Dtessera_Terra_Windows_Beta
           path: dist/Dtessera_Terra.exe
@@ -28,8 +25,8 @@ jobs:
   build_mac:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - run: |
@@ -37,7 +34,7 @@ jobs:
           pip install pygame-ce pyinstaller
           pyinstaller --noconsole --onedir --clean --name "Dtessera_Terra" "Dtessera Terra.py"
           cd dist && zip -r -q Dtessera_Terra_Mac.app.zip Dtessera_Terra.app
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Dtessera_Terra_Mac_Beta
           path: dist/Dtessera_Terra_Mac.app.zip
@@ -45,13 +42,13 @@ jobs:
   build_android_and_web:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python 3.12, JDK 21 & Gradle 8.11.1
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -163,11 +160,11 @@ jobs:
           # Confirm index.html is right at the top of build/web
           test -f build/web/index.html
 
-      - name: Upload Web & iOS Bundle
-        uses: actions/upload-artifact@v4
+      - name: Upload Web & iOS Bundle (Ready for itch.io - No Unzip Needed)
+        uses: actions/upload-artifact@v7
         with:
           name: Dtessera_Terra_Web_Beta
-          path: build/web.zip
+          path: build/web
 
       - name: Build Pure Native Android SDK 35 APK
         run: |
@@ -248,21 +245,43 @@ jobs:
 
           import android.annotation.SuppressLint;
           import android.app.Activity;
+          import android.graphics.Color;
           import android.net.Uri;
           import android.os.Bundle;
+          import android.view.Gravity;
           import android.view.View;
           import android.view.WindowManager;
+          import android.webkit.ConsoleMessage;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceError;
           import android.webkit.WebResourceRequest;
           import android.webkit.WebResourceResponse;
           import android.webkit.WebSettings;
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
+          import android.widget.FrameLayout;
+          import android.widget.TextView;
           import java.io.InputStream;
+          import java.util.ArrayDeque;
+          import java.util.Deque;
           import java.util.HashMap;
           import java.util.Map;
 
           public class MainActivity extends Activity {
               private WebView webView;
+              private TextView debugOverlay;
+              private final Deque<String> logs = new ArrayDeque<>();
+
+              private void appendLog(String line, boolean showNow) {
+                  runOnUiThread(() -> {
+                      if (logs.size() >= 20) logs.removeFirst();
+                      logs.addLast(line);
+                      StringBuilder sb = new StringBuilder("Tap log box to hide:\n");
+                      for (String s : logs) sb.append(s).append("\n");
+                      debugOverlay.setText(sb.toString());
+                      if (showNow) debugOverlay.setVisibility(View.VISIBLE);
+                  });
+              }
 
               @SuppressLint("SetJavaScriptEnabled")
               @Override
@@ -278,17 +297,74 @@ jobs:
                       | View.SYSTEM_UI_FLAG_FULLSCREEN
                   );
 
+                  WebView.setWebContentsDebuggingEnabled(true);
+
+                  FrameLayout root = new FrameLayout(this);
                   webView = new WebView(this);
-                  setContentView(webView);
+                  root.addView(webView, new FrameLayout.LayoutParams(
+                      FrameLayout.LayoutParams.MATCH_PARENT,
+                      FrameLayout.LayoutParams.MATCH_PARENT
+                  ));
+
+                  debugOverlay = new TextView(this);
+                  debugOverlay.setBackgroundColor(Color.argb(220, 0, 0, 0));
+                  debugOverlay.setTextColor(Color.GREEN);
+                  debugOverlay.setTextSize(11);
+                  debugOverlay.setPadding(24, 24, 24, 24);
+                  debugOverlay.setVisibility(View.GONE);
+                  debugOverlay.setOnClickListener(v -> debugOverlay.setVisibility(View.GONE));
+                  root.addView(debugOverlay, new FrameLayout.LayoutParams(
+                      FrameLayout.LayoutParams.MATCH_PARENT,
+                      FrameLayout.LayoutParams.WRAP_CONTENT,
+                      Gravity.BOTTOM
+                  ));
+
+                  TextView logBtn = new TextView(this);
+                  logBtn.setText("LOG");
+                  logBtn.setTextColor(Color.WHITE);
+                  logBtn.setBackgroundColor(Color.argb(120, 0, 0, 0));
+                  logBtn.setTextSize(10);
+                  logBtn.setPadding(16, 10, 16, 10);
+                  logBtn.setOnClickListener(v -> debugOverlay.setVisibility(
+                      debugOverlay.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE
+                  ));
+                  root.addView(logBtn, new FrameLayout.LayoutParams(
+                      FrameLayout.LayoutParams.WRAP_CONTENT,
+                      FrameLayout.LayoutParams.WRAP_CONTENT,
+                      Gravity.TOP | Gravity.END
+                  ));
+
+                  setContentView(root);
 
                   WebSettings settings = webView.getSettings();
                   settings.setJavaScriptEnabled(true);
                   settings.setDomStorageEnabled(true);
                   settings.setDatabaseEnabled(true);
                   settings.setMediaPlaybackRequiresUserGesture(false);
+                  settings.setUseWideViewPort(true);
+                  settings.setLoadWithOverviewMode(true);
+                  settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
                   settings.setCacheMode(WebSettings.LOAD_DEFAULT);
 
+                  webView.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public boolean onConsoleMessage(ConsoleMessage cm) {
+                          String msg = cm.message();
+                          boolean isErr = cm.messageLevel() == ConsoleMessage.MessageLevel.ERROR
+                                  || msg.contains("Traceback")
+                                  || msg.contains("SyntaxError")
+                                  || msg.contains("Exception");
+                          appendLog("[" + cm.messageLevel() + "] " + msg, isErr);
+                          return true;
+                      }
+                  });
+
                   webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                          appendLog("NET ERR: " + request.getUrl() + " -> " + error.getDescription(), true);
+                      }
+
                       @Override
                       public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                           Uri uri = request.getUrl();
@@ -309,6 +385,7 @@ jobs:
                                   headers.put("Access-Control-Allow-Origin", "*");
                                   return new WebResourceResponse(mime, "UTF-8", 200, "OK", headers, is);
                               } catch (Exception e) {
+                                  appendLog("404 LOCAL: " + path, true);
                                   return new WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", null, null);
                               }
                           }
@@ -328,7 +405,7 @@ jobs:
           gradle assembleDebug --no-daemon
 
       - name: Upload Android Beta APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Dtessera_Terra_Android_Beta
           path: android_native/app/build/outputs/apk/debug/app-debug.apk
