@@ -588,10 +588,6 @@ def check_movement_weather_and_swim(player, target_x, target_y, world_map):
 # 4. SCREEN OVERLAY & HUD WEATHER BANNER RENDERER
 # =========================================================================
 def draw_weather_and_darkness_overlay(screen, player, font, font_bold, mouse_pos=None):
-    """
-    Renders ONLY the compact, clickable Top-Bar Weather & Altitude Status Pill
-    (No grey 420x420 box over the background!).
-    """
     ensure_weather_initialized(player)
     if mouse_pos is None:
         mouse_pos = pygame.mouse.get_pos()
@@ -601,7 +597,6 @@ def draw_weather_and_darkness_overlay(screen, player, font, font_bold, mouse_pos
     sat = player.get("ground_saturation", 35)
     light_info = get_daylight_state(player)
 
-    from map_data import world_map
     pos = (player.get("x", 8), player.get("y", 14))
     alt, elev_m, local_temp_c = get_tile_altitude_and_temp(player, pos, world_map)
 
@@ -626,15 +621,10 @@ def draw_weather_and_darkness_overlay(screen, player, font, font_bold, mouse_pos
     pygame.draw.rect(screen, (168, 50, 35), WEATHER_PILL_RECT, width=2, border_radius=5)
     pygame.draw.rect(screen, (28, 28, 28), WEATHER_PILL_RECT.inflate(-2, -2), width=1, border_radius=4)
 
-    from ui_components import draw_fitted_text
     draw_fitted_text(screen, bar_txt, WEATHER_PILL_RECT.inflate(-12, -2), txt_col, bold=is_hover, max_lines=1)
 
-
 def draw_weather_report_modal(screen, player, world_map, font, font_bold, mouse_pos):
-    """
-    Renders the 700x500 Tate Britain Meteorological & Hydrological Almanac Pop-Out
-    with every text block strictly fitted inside its box using draw_fitted_text!
-    """
+    
     from ui_components import draw_fitted_text
     ensure_weather_initialized(player)
 
@@ -757,13 +747,29 @@ def toggle_topo_map(player):
     state_str = "ENABLED" if player["topo_overlay_active"] else "HIDDEN"
     return f"Topographic & Flood-Stage Survey Map Overlay: **{state_str}**."
 
-def draw_topographic_contour_overlay(screen, player, world_map, map_rect=pygame.Rect(20, 160, 420, 420)):
+TOPO_TIER_COLORS = {
+    0: (48, 92, 132),    # Tier 0: 0m Water
+    1: (132, 118, 86),   # Tier 1: 5m Sunken Hollow
+    2: (110, 145, 85),   # Tier 2: 20m Lowland Floodplain
+    3: (82, 128, 72),    # Tier 3: 60m Upland Ridge
+    4: (138, 126, 116),  # Tier 4: 180m Foothills
+    5: (218, 222, 226),  # Tier 5: 450m High Peaks
+}
+
+
+def draw_topographic_contour_overlay(screen, player, world_map, map_rect=None):
     """
     When player['topo_overlay_active'] is True, renders a live Topographic & Flood-Stage
     surveyor's grid centered on the player's current position (7x7 visible tile window).
     """
     if not player.get("topo_overlay_active", False) or player.get("current_building") or "topographic survey map" not in player.get("inventory", []):
         return
+
+    if map_rect is None:
+        if screen.get_width() > 800:
+            map_rect = pygame.Rect(390, 168, 420, 420)
+        else:
+            map_rect = pygame.Rect(20, 160, 420, 420)
 
     ensure_weather_initialized(player)
     sat = player.get("ground_saturation", 35)
