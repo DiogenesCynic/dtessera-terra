@@ -179,25 +179,40 @@ jobs:
 
           cp -r build/web/* android_native/app/src/main/assets/public/
 
-          # Patch Android-only index.html for exact 1:1 touch alignment & edge-to-edge notch fill
+          # Patch Android-only index.html for exact 1:1 touch alignment & centered 2:1 fit
           python3 - << 'EOF'
           import pathlib, re
           p = pathlib.Path("android_native/app/src/main/assets/public/index.html")
           html = p.read_text(encoding="utf-8")
+          if not html.lstrip().lower().startswith("<!doctype"):
+              html = "<!DOCTYPE html>\n" + html
           html = re.sub(r'<meta[^>]*name=["\']viewport["\'][^>]*>', '', html, flags=re.IGNORECASE)
-          wide_css = (
+          wide_head = (
               "<head>"
               '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">'
               "<style>"
-              "html, body { margin:0 !important; padding:0 !important; width:100vw !important; "
-              "height:100vh !important; overflow:hidden !important; background:#100f0e !important; touch-action:none; }"
-              "#canvas, canvas.emscripten { position:fixed !important; top:50% !important; left:50% !important; "
-              "transform:translate(-50%, -50%) !important; width:min(100vw, 200vh) !important; "
-              "height:min(100vh, 50vw) !important; max-width:none !important; max-height:none !important; "
+              "html, body { margin:0 !important; padding:0 !important; width:100% !important; height:100% !important; "
+              "overflow:hidden !important; background:#100f0e !important; zoom:1 !important; "
+              "display:flex !important; align-items:center !important; justify-content:center !important; touch-action:none; }"
+              "#canvas, canvas.emscripten { position:static !important; transform:none !important; margin:0 !important; "
               "display:block !important; }"
               "</style>"
+              "<script>"
+              "function fitDtesseraCanvas() {"
+              "  var c = document.getElementById('canvas') || document.querySelector('canvas');"
+              "  if (!c) return;"
+              "  var vw = document.documentElement.clientWidth || window.innerWidth;"
+              "  var vh = document.documentElement.clientHeight || window.innerHeight;"
+              "  var w = Math.floor(Math.min(vw, vh * 2));"
+              "  var h = Math.floor(w / 2);"
+              "  c.style.width = w + 'px';"
+              "  c.style.height = h + 'px';"
+              "}"
+              "window.addEventListener('resize', fitDtesseraCanvas);"
+              "setInterval(fitDtesseraCanvas, 250);"
+              "</script>"
           )
-          html = html.replace("<head>", wide_css, 1)
+          html = html.replace("<head>", wide_head, 1)
           p.write_text(html, encoding="utf-8")
           EOF
 
@@ -233,8 +248,8 @@ jobs:
                   applicationId "com.noburu.dtesseraterra"
                   minSdk 26
                   targetSdk 35
-                  versionCode 2
-                  versionName "1.1"
+                  versionCode 3
+                  versionName "1.2"
               }
               androidResources {
                   noCompress += ['apk', 'asset', 'gz', 'tar', 'wasm', 'data', 'whl', 'zip']
