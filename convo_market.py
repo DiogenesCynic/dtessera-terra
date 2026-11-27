@@ -318,9 +318,9 @@ def resolve_market_manager(choice, player):
             log = (
                 "Godwin Williams waves you over frantically.\n"
                 "\"Leave the broom! The Apothecary is in a state of panic—they are waiting on an urgent delivery of Moon-Blight Extract, and their patient is fading fast!\"\n"
-                "\"Run to the Post Office immediately and see if you can intercept the parcel!\"\n"
-                "\"Once you get it, hand it directly to the Apothecary at the High Street, then report back to me!\"\n\n"
-                "*** SHIFT 2 STARTED! Go to the Post Office and speak to the Postmaster! ***"
+                "\"Sprint to the Post Office immediately and see if you can intercept the parcel!\"\n"
+                "\"Once you have it, run it straight to the Apothecary on the High Street, then report back to me!\"\n\n"
+                "*** URGENT ERRAND: You break into a flat sprint through Murum's streets (10 minutes per street instead of 15, though the pace drains your stamina and hastens exhaustion). Head to the Post Office and speak to the Postmaster! ***"
             )
             return player, log, "MAIN"
 
@@ -808,7 +808,7 @@ def resolve_postmaster(choice, player):
             "\"The Apothecary's parcel? You missed Fleetfoot the Postie by **34 minutes**! They are already out on their delivery loop:\"\n"
             "\"1: Stables -> 2: Guard House -> 3: School -> 4: Playhouse -> 5: Wallmakers -> 6: Blacksmiths -> 7: Union House -> 8: Town Hall -> 9: Dog and Duck Pub -> 10: Post Office.\"\n\n"
             "\"Fleetfoot takes **14 minutes** to travel between each stop on their route.\"\n"
-            "\"You travel at **10 minutes** per grid move (North, South, East, or West). Work out where Fleetfoot will be and take the **shortest route** from here so you arrive at that stop at the **exact same minute** as Fleetfoot!\"\n\n"
+            "\"At a hard sprint, you cover each street in **10 minutes** (North, South, East, or West)—save your breath and don't take detours. Work out where Fleetfoot will be and take the **shortest route** from here so you arrive at that stop at the **exact same minute** as Fleetfoot!\"\n\n"
             "*** CHASE STARTED (t = 0m)! Use 'Read -> Postie's Route Sheet' if you need to check the stops, and take the shortest route to intercept Fleetfoot! ***"
         )
         return player, log, "MAIN"
