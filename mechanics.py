@@ -574,6 +574,35 @@ def advance_time(minutes, player, world_map=None):
     pass_and_play.record_time_advanced(player, minutes)
     return player, log_msg
 
+POSTIE_RUSH_TASKS = {
+    "find_postie_post_office",
+    "intercept_postie",
+    "deliver_to_apothecary",
+}
+
+
+def is_rushing_town_errand(player, target_room):
+    """
+    Returns True when the player is sprinting on foot through town during an
+    urgent medical delivery (10 decimal minutes per street, faster fatigue).
+    """
+    return (
+        not player.get("riding_horse")
+        and "Town" in target_room.region
+        and player.get("active_market_task") in POSTIE_RUSH_TASKS
+    )
+
+def apply_sprint_exhaustion(player, extra_drain=0):
+    """
+    Applies extra Hunger, Thirst, and sleep-fatigue drain when sprinting
+    a town street at 10 decimal minutes, keeping the clock exact.
+    """
+    hunger_cost = 2 + extra_drain
+    thirst_cost = 3 + extra_drain
+    player["hunger"] = max(0, round(player["hunger"] - hunger_cost, 1))
+    player["thirst"] = max(0, round(player["thirst"] - thirst_cost, 1))
+    player["last_sleep_minute"] = player.get("last_sleep_minute", 0) - 25
+    return hunger_cost, thirst_cost
 
 def get_time_string(total_mins):
     """Formats total game minutes into the French Republican Decimal Calendar & Clock."""
