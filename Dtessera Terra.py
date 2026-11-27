@@ -51,6 +51,8 @@ import conversation as convo
 from mechanics import (
     AFFLICTION_INFO,
     advance_time,
+    apply_sprint_exhaustion,
+    is_rushing_town_errand,
     build_playtest_report,
     can_use_storage,
     check_stabling_foreclosure,
@@ -814,7 +816,7 @@ def action_move(dx, dy, dir_name):
     if override_pos:
         target_x, target_y = override_pos
         target_pos = (target_x, target_y)
-    if weather_extra_mins > 0:
+    if weather_extra_mins > 0 and not is_rushing_town_errand(player, target_room):
         player, w_time_msg = advance_time(weather_extra_mins, player)
         if w_time_msg:
             add_log(w_time_msg)
@@ -959,6 +961,17 @@ def action_move(dx, dy, dir_name):
                 player["horse_shoe_durability"] = 0
         else:
             player, t_log = advance_time(45, player)
+    elif is_rushing_town_errand(player, target_room):
+        # Urgent town sprint: strict 10 minutes per street with heightened exhaustion
+        player, t_log = advance_time(10, player)
+        weather_tax = 1 if weather_extra_mins > 0 else 0
+        h_cost, th_cost = apply_sprint_exhaustion(player, extra_drain + weather_tax)
+        pack_note = f" Carrying {curr_w}/{max_w} lbs makes the sprint brutal!" if extra_drain > 0 else ""
+        add_log(
+            f"You sprint hard down the cobbled street (10 mins), lungs burning as exhaustion creeps in.{pack_note} "
+            f"(-{h_cost} Hunger, -{th_cost} Thirst)"
+        )
+        extra_drain = 0
     else:
         # 15 mins for town tiles, 90 mins for wilderness!
         base_mins = 15 if "Town" in target_room.region else 90
