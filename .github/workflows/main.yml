@@ -177,6 +177,59 @@ jobs:
           mkdir -p android_native/app/src/main/java/com/noburu/dtesseraterra
           mkdir -p android_native/app/src/main/assets/public
 
+          # Generate Android adaptive & legacy launcher icons from app_icon.png
+          python -m pip install -q pillow
+          python3 - << 'EOF'
+          import os
+          from PIL import Image, ImageOps
+
+          if not os.path.exists("app_icon.png"):
+              raise SystemExit("ERROR: Upload app_icon.png to the repository root first.")
+
+          src = Image.open("app_icon.png").convert("RGBA")
+          res_dir = "android_native/app/src/main/res"
+
+          densities = {
+              "mdpi":    (48, 108),
+              "hdpi":    (72, 162),
+              "xhdpi":   (96, 216),
+              "xxhdpi":  (144, 324),
+              "xxxhdpi": (192, 432),
+          }
+
+          for dpi, (legacy_px, fg_px) in densities.items():
+              folder = os.path.join(res_dir, f"mipmap-{dpi}")
+              os.makedirs(folder, exist_ok=True)
+              legacy = ImageOps.fit(src, (legacy_px, legacy_px), Image.Resampling.LANCZOS)
+              legacy.save(os.path.join(folder, "ic_launcher.png"))
+              legacy.save(os.path.join(folder, "ic_launcher_round.png"))
+              fg = ImageOps.fit(src, (fg_px, fg_px), Image.Resampling.LANCZOS)
+              fg.save(os.path.join(folder, "ic_launcher_foreground.png"))
+
+          os.makedirs(os.path.join(res_dir, "mipmap-anydpi-v26"), exist_ok=True)
+          os.makedirs(os.path.join(res_dir, "values"), exist_ok=True)
+
+          adaptive_xml = (
+              '<?xml version="1.0" encoding="utf-8"?>\n'
+              '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
+              '    <background android:drawable="@color/ic_launcher_background" />\n'
+              '    <foreground android:drawable="@mipmap/ic_launcher_foreground" />\n'
+              '</adaptive-icon>\n'
+          )
+          for name in ("ic_launcher.xml", "ic_launcher_round.xml"):
+              with open(os.path.join(res_dir, "mipmap-anydpi-v26", name), "w", encoding="utf-8") as f:
+                  f.write(adaptive_xml)
+
+          colors_xml = (
+              '<?xml version="1.0" encoding="utf-8"?>\n'
+              '<resources>\n'
+              '    <color name="ic_launcher_background">#100F0E</color>\n'
+              '</resources>\n'
+          )
+          with open(os.path.join(res_dir, "values", "colors.xml"), "w", encoding="utf-8") as f:
+              f.write(colors_xml)
+          EOF
+
           cp -r build/web/* android_native/app/src/main/assets/public/
 
           # Patch Android-only index.html for exact 1:1 touch alignment & centered 2:1 fit
@@ -256,7 +309,7 @@ jobs:
                   applicationId "com.noburu.dtesseraterra"
                   minSdk 26
                   targetSdk 35
-                  versionCode 3
+                  versionCode 4
                   versionName "1.2"
               }
               androidResources {
@@ -275,6 +328,8 @@ jobs:
               <uses-permission android:name="android.permission.INTERNET" />
               <application
                   android:label="Dtessera Terra"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher_round"
                   android:hardwareAccelerated="true"
                   android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
                   <activity
